@@ -1,12 +1,14 @@
 ﻿using BotSharp.Core.Engines;
-using BotSharp.Platform.Abstraction;
+using BotSharp.Platform.Abstractions;
 using BotSharp.Platform.Models;
 using BotSharp.Platform.Models.AiRequest;
 using BotSharp.Platform.Models.AiResponse;
+using BotSharp.Platform.Models.Contexts;
 using BotSharp.Platform.Models.Entities;
 using BotSharp.Platform.Models.Intents;
 using BotSharp.Platform.Models.MachineLearning;
 using DotNetToolkit;
+using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -25,19 +27,20 @@ namespace BotSharp.Core
 
         public IAgentStorage<TAgent> Storage { get; set; }
 
-        private readonly IAgentStorageFactory<TAgent> agentStorageFactory;
-        private readonly IPlatformSettings settings;
+        protected readonly IAgentStorageFactory<TAgent> agentStorageFactory;
+        protected readonly IContextStorageFactory<AIContext> contextStorageFactory;
+        protected readonly IPlatformSettings settings;
 
-        public PlatformBuilderBase(IAgentStorageFactory<TAgent> agentStorageFactory, IPlatformSettings settings)
+        public PlatformBuilderBase(IAgentStorageFactory<TAgent> agentStorageFactory, IContextStorageFactory<AIContext> contextStorageFactory, IPlatformSettings settings)
         {
             this.agentStorageFactory = agentStorageFactory;
+            this.contextStorageFactory = contextStorageFactory;
             this.settings = settings;
+            GetAgentStorage();
         }
 
         public async Task<List<TAgent>> GetAllAgents()
         {
-            await GetStorage();
-
             return await Storage.Query();
         }
 
@@ -80,15 +83,11 @@ namespace BotSharp.Core
 
         public async Task<TAgent> GetAgentById(string agentId)
         {
-            GetStorage();
-
             return await Storage.FetchById(agentId);
         }
 
         public async Task<TAgent> GetAgentByName(string agentName)
         {
-            await GetStorage();
-
             return await Storage.FetchByName(agentName);
         }
 
@@ -137,10 +136,10 @@ namespace BotSharp.Core
 
         public virtual async Task<TResult> TextRequest<TResult>(AiRequest request)
         {
-            string contexts = String.Join("_", request.Contexts);
-            string contextHash = contexts.GetMd5Hash();
+            // merge last contexts
+            string contextHash = await GetContextsHash(request);
 
-            Console.WriteLine($"TextRequest: {request.Text}, {contexts}, {request.SessionId}");
+            Console.WriteLine($"TextRequest: {request.Text}, {request.AgentId}, {string.Join(",", request.Contexts)}, {request.SessionId}");
 
             // Load agent
             var projectPath = Path.Combine(AppDomain.CurrentDomain.GetData("DataPath").ToString(), "Projects", request.AgentId);
@@ -195,54 +194,51 @@ namespace BotSharp.Core
 
             Console.WriteLine($"TextResponse: {aiResponse.Intent}, {request.SessionId}");
 
-            return await AssembleResult<TResult>(aiResponse);
+            return await AssembleResult<TResult>(request, aiResponse);
+        }
+
+        private async Task<string> GetContextsHash(AiRequest request)
+        {
+            var ctxStore = contextStorageFactory.Get();
+            var contexts = await ctxStore.Fetch(request.SessionId);
+            for(int i = 0; i < contexts.Length; i++)
+            {
+                var ctx = contexts[i];
+                if (ctx.Lifespan > 0 && !request.Contexts.Exists(x => x == ctx.Name))
+                {
+                    request.Contexts.Add(ctx.Name);
+                }
+            }
+
+            request.Contexts = request.Contexts.OrderBy(x => x).ToList();
+
+            return String.Join("_", request.Contexts).GetMd5Hash();
         }
 
         public virtual async Task<TextClassificationResult> FallbackResponse(AiRequest request)
         {
-            var data = new
-            {
-                token = "openbot",
-                info = request.Text
-            };
-
-            using (var client = new HttpClient())
-            {
-                var response = await client.PostAsync(
-                    "https://api.ownthink.com/bot",
-                    new StringContent(JsonConvert.SerializeObject(data), Encoding.UTF8, "application/json"));
-                var content = await response.Content.ReadAsStringAsync();
-                var result = JsonConvert.DeserializeObject<JObject>(content);
-
-                return new TextClassificationResult
-                {
-                    Classifier = "ownthink",
-                    Text = result["text"].ToString()
-                };
-            }
+            throw new NotImplementedException("FallbackResponse");
         }
 
-        public virtual async Task<TResult> AssembleResult<TResult>(AiResponse response)
+        public virtual async Task<TResult> AssembleResult<TResult>(AiRequest request, AiResponse response)
         {
             throw new NotImplementedException();
         }
 
         public virtual async Task<bool> SaveAgent(TAgent agent)
         {
-            await GetStorage();
-
             // default save agent in FileStorage
             await Storage.Persist(agent);
 
             return true;
         }
-
-        protected async Task<IAgentStorage<TAgent>> GetStorage()
+        protected IAgentStorage<TAgent> GetAgentStorage()
         {
             if (Storage == null)
             {
-                Storage = await agentStorageFactory.Get();
+                Storage = agentStorageFactory.Get();
             }
+
             return Storage;
         }
     }

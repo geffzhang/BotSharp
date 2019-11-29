@@ -1,4 +1,4 @@
-﻿using BotSharp.Platform.Abstraction;
+﻿using BotSharp.Platform.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using System;
@@ -16,9 +16,12 @@ namespace BotSharp.Core
         {
             BotEngine = "BotSharpNLU";
             AgentStorage = "AgentStorageInFile";
+            ContextStorage = "ContextStorageInFile";
         }
 
         public string BotEngine { get; set; }
+
+        public string ContextStorage { get; set; }
 
         public string AgentStorage { get; set; }
     }

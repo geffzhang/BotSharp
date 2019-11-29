@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using BotSharp.Core;
-using BotSharp.Platform.Abstraction;
+using BotSharp.Platform.Abstractions;
 using BotSharp.Platform.Models;
 using DotNetToolkit;
 using BotSharp.Platform.Dialogflow.Models;
@@ -15,6 +15,9 @@ using BotSharp.Platform.Models.AiResponse;
 using BotSharp.Platform.Models.AiRequest;
 using Turing.NET;
 using System.Text.RegularExpressions;
+using BotSharp.Platform.Models.Contexts;
+using Ding.Log;
+using Ding.Serialization;
 
 namespace BotSharp.Platform.Dialogflow
 {
@@ -25,8 +28,8 @@ namespace BotSharp.Platform.Dialogflow
     {
         IConfiguration config;
 
-        public DialogflowAi(IAgentStorageFactory<TAgent> agentStorageFactory, IPlatformSettings settings, IConfiguration config)
-            :base(agentStorageFactory, settings)
+        public DialogflowAi(IAgentStorageFactory<TAgent> agentStorageFactory, IContextStorageFactory<AIContext> contextStorageFactory, IPlatformSettings settings, IConfiguration config)
+            : base(agentStorageFactory, contextStorageFactory, settings)
         {
             this.config = config;
         }
@@ -110,7 +113,7 @@ namespace BotSharp.Platform.Dialogflow
             }
         }
 
-        public override async Task<TResult> AssembleResult<TResult>(AiResponse response)
+        public override async Task<TResult> AssembleResult<TResult>(AiRequest request, AiResponse response)
         {
             var intent = Agent.Intents.Find(x => x.Name == response.Intent);
             var presetResponse = intent.Responses.FirstOrDefault();
@@ -133,7 +136,9 @@ namespace BotSharp.Platform.Dialogflow
             });
 
             var matches = Regex.Matches(presetResponse.Messages.Random().Speech, "\".*?\"").Cast<Match>();
-            var speech = matches.ToList().Random();
+            var speech = matches.Count() == 0 ? String.Empty : matches.ToList().Random().Value;
+
+            var contexts = HandleContexts(request.SessionId, presetResponse);
 
             var aiResponse = new AIResponseResult
             {
@@ -143,17 +148,35 @@ namespace BotSharp.Platform.Dialogflow
                 {
                     IntentName = response.Intent
                 },
+                Intent = response.Intent,
                 Fulfillment = new AIResponseFulfillment
                 {
                     Messages = presetResponse.Messages.ToList<object>(),
-                    Speech = speech.Value.Substring(1, speech.Length - 2)
+                    Speech = speech.Length > 1 ? speech.Substring(1, speech.Length - 2) : String.Empty
                 },
                 Score = response.Score,
                 Source = response.Source,
+                Contexts = contexts.ToArray(),
                 Parameters = presetResponse.Parameters.Where(x => !String.IsNullOrEmpty(x.Value)).ToDictionary(item => item.Name, item => (object)item.Value)
             };
 
             return (TResult)(object)aiResponse;
+        }
+
+        private List<AIContext> HandleContexts(string sessionId, IntentResponse response)
+        {
+            var newContexts = response.Contexts.Select(x => new AIContext
+            {
+                Name = x.Name,
+                Lifespan = x.Lifespan,
+                Parameters = response.Parameters.Select(p => new KeyValuePair<string, object>(p.Name, p.Value)).ToDictionary(d => d.Key, d => d.Value == null ? String.Empty : d.Value)
+            }).ToList();
+
+            // persist
+            var ctxStore = contextStorageFactory.Get();
+            ctxStore.Persist(sessionId, newContexts.ToArray());
+
+            return newContexts;
         }
     }
 }

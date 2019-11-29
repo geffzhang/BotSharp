@@ -1,9 +1,11 @@
 ﻿using BotSharp.Core;
 using BotSharp.Core.AgentStorage;
+using BotSharp.Core.ContextStorage;
 using BotSharp.Core.Modules;
-using BotSharp.Platform.Abstraction;
+using BotSharp.Platform.Abstractions;
 using BotSharp.Platform.Dialogflow.Models;
 using BotSharp.Platform.Models;
+using BotSharp.Platform.Models.Contexts;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -21,6 +23,7 @@ namespace BotSharp.Platform.Dialogflow
             services.AddSingleton<DialogflowAi<AgentModel>>();
             AgentStorageServiceRegister.Register<AgentModel>(services);
             PlatformConfigServiceRegister.Register<PlatformSettings>("dialogflowAi", services, config);
+            ContextStorageServiceRegister.Register<AIContext>(services);
         }
 
         public void Configure(IApplicationBuilder app, IHostingEnvironment env)
