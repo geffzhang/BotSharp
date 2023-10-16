@@ -1,0 +1,120 @@
+using BotSharp.Abstraction.Agents.Models;
+using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Repositories;
+using BotSharp.Abstraction.Routing;
+using BotSharp.Abstraction.Routing.Models;
+using BotSharp.Abstraction.Routing.Settings;
+
+namespace BotSharp.Core.Routing;
+
+public class RouterInstance : IRouterInstance
+{
+    protected readonly IServiceProvider _services;
+    protected readonly ILogger _logger;
+    protected readonly RoutingSettings _settings;
+
+    private Agent _router;
+    public Agent Router => _router;
+    public virtual string AgentId => _router.Id;
+
+    public RouterInstance(IServiceProvider services,
+        ILogger<RouterInstance> logger,
+        RoutingSettings settings)
+    {
+        _services = services;
+        _logger = logger;
+        _settings = settings;
+    }
+
+    public IRouterInstance Load()
+    {
+        var agentService = _services.GetRequiredService<IAgentService>();
+        _router = agentService.LoadAgent(_settings.RouterId).Result;
+        return this;
+    }
+
+    public IRouterInstance WithDialogs(List<RoleDialogModel> dialogs)
+    {
+        foreach (var dialog in dialogs.TakeLast(20))
+        {
+            _router.Instruction += $"\r\n{dialog.Role}: {dialog.Content}";
+        }
+        return this;
+    }
+
+    public List<RoutingHandlerDef> GetHandlers()
+    {
+        return _services.GetServices<IRoutingHandler>()
+            .Where(x => x.IsReasoning == _settings.EnableReasoning)
+            .Where(x => !string.IsNullOrEmpty(x.Description))
+            .Select((x, i) => new RoutingHandlerDef
+            {
+                Name = x.Name,
+                Description = x.Description,
+                Parameters = x.Parameters
+            }).ToList();
+    }
+
+#if !DEBUG
+    [MemoryCache(10 * 60)]
+#endif
+    protected RoutingRule[] GetRoutingRecords()
+    {
+        var db = _services.GetRequiredService<IBotSharpRepository>();
+
+        var agents = db.Agents.Where(x => !x.Disabled && x.AllowRouting).ToArray();
+        var records = agents.SelectMany(x =>
+        {
+            x.RoutingRules.ForEach(r =>
+            {
+                r.AgentId = x.Id;
+                r.AgentName = x.Name;
+            });
+            return x.RoutingRules;
+        }).ToArray();
+
+        // Filter agents by profile
+        var state = _services.GetRequiredService<IConversationStateService>();
+        var name = state.GetState("channel");
+        var specifiedProfile = agents.FirstOrDefault(x => x.Profiles.Contains(name));
+        if (specifiedProfile != null)
+        {
+            records = records.Where(x => specifiedProfile.Profiles.Contains(name)).ToArray();
+        }
+
+        return records;
+    }
+
+#if !DEBUG
+    [MemoryCache(10 * 60)]
+#endif
+    public RoutingItem[] GetRoutingItems()
+    {
+        var db = _services.GetRequiredService<IBotSharpRepository>();
+
+        var agents = db.Agents.Where(x => !x.Disabled && x.AllowRouting).ToArray();
+        return agents.Select(x => new RoutingItem
+        {
+            AgentId = x.Id,
+            Description = x.Description,
+            Name = x.Name,
+            RequiredFields = x.RoutingRules.Where(x => x.Required)
+                .Select(x => new NameDesc(x.Field, x.Description))
+                .ToList()
+        }).ToArray();
+    }
+
+    public RoutingRule[] GetRulesByName(string name)
+    {
+        return GetRoutingRecords()
+            .Where(x => x.AgentName.ToLower() == name.ToLower())
+            .ToArray();
+    }
+
+    public RoutingRule[] GetRulesByAgentId(string id)
+    {
+        return GetRoutingRecords()
+            .Where(x => x.AgentId == id)
+            .ToArray();
+    }
+}
