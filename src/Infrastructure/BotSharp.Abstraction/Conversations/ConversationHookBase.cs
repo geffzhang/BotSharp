@@ -27,14 +27,13 @@ public abstract class ConversationHookBase : IConversationHook
     }
 
     public virtual Task OnStateLoaded(ConversationState state)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
 
     public virtual Task OnStateChanged(string name, string preValue, string currentValue)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
+
+    public virtual Task OnDialogRecordLoaded(RoleDialogModel dialog)
+        => Task.CompletedTask;
 
     public virtual Task OnDialogsLoaded(List<RoleDialogModel> dialogs)
     {
@@ -42,43 +41,30 @@ public abstract class ConversationHookBase : IConversationHook
         return Task.CompletedTask;
     }
 
-    public virtual Task ConversationEnding(RoleDialogModel message)
-    {
-        return Task.CompletedTask;
-    }
+    public virtual Task OnConversationEnding(RoleDialogModel message)
+        => Task.CompletedTask;
 
-    public virtual Task CurrentTaskEnding(RoleDialogModel conversation)
-    {
-        return Task.CompletedTask;
-    }
+    public virtual Task OnCurrentTaskEnding(RoleDialogModel message)
+        => Task.CompletedTask;
 
-    public virtual Task HumanInterventionNeeded(RoleDialogModel conversation)
-    {
-        return Task.CompletedTask;
-    }
+    public virtual Task OnHumanInterventionNeeded(RoleDialogModel message)
+        => Task.CompletedTask;
 
     public virtual Task OnFunctionExecuting(RoleDialogModel message)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
 
     public virtual Task OnFunctionExecuted(RoleDialogModel message)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
 
     public virtual Task OnMessageReceived(RoleDialogModel message)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
 
     public virtual Task OnResponseGenerated(RoleDialogModel message)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
 
     public virtual Task OnConversationInitialized(Conversation conversation)
-    {
-        return Task.CompletedTask;
-    }
+        => Task.CompletedTask;
+
+    public virtual Task OnUserAgentConnectedInitially(Conversation conversation)
+        => Task.CompletedTask;
 }

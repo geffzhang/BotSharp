@@ -6,10 +6,14 @@ In order to allow developers to experience the convenience of BotSharp as quickl
 
 ### Run in command line
 
-```console
+```shell
 git clone https://github.com/SciSharp/BotSharp
 cd BotSharp
+# Run PizzzaBot showcase with package reference
 dotnet run --project .\src\WebStarter\WebStarter.csproj -p SolutionName=PizzaBot
+
+# Use BotSharp to include all dependent projects with latest source code
+dotnet run --project .\src\WebStarter
 ```
 
 Here you go, you will see this running screen.
@@ -20,6 +24,20 @@ Next, try to access the chat from `Open API`, we public our [Postman collection]
 
 ![Pizza Bot Starter](assets/PizzaBotSample4.png)
 
+### Launch the UI
+
+BotSharp has an official front-end project to be used in conjunction with the backend. The main function of this project is to allow developers to visualize various configurations of the backend.
+
+```console
+git clone https://github.com/SciSharp/BotSharp-UI
+cd BotSharp-UI
+npm install
+npm run dev
+```
+
+Access the http://localhost:5015/
+
+![BotSharp UI Router](assets/BotSharp-UI-Router.png)
 
 ### Run in debug mode
 

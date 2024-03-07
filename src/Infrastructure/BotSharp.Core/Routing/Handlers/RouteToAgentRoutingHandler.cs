@@ -1,8 +1,3 @@
-using BotSharp.Abstraction.Functions;
-using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Models;
-using BotSharp.Abstraction.Routing;
-using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Abstraction.Routing.Settings;
 
 namespace BotSharp.Core.Routing.Handlers;
@@ -13,35 +8,79 @@ public class RouteToAgentRoutingHandler : RoutingHandlerBase, IRoutingHandler
 
     public string Description => "Route request to appropriate agent.";
 
-    public List<NameDesc> Parameters => new List<NameDesc>
+    public List<ParameterPropertyDef> Parameters => new List<ParameterPropertyDef>
     {
-        new NameDesc("args", "useful parameters of next action agent")
+        new ParameterPropertyDef("next_action_reason", "the reason why route to this agent") 
+        { 
+            Required = true 
+        },
+        new ParameterPropertyDef("next_action_agent", "agent for next action based on user latest response")
+        {
+            Required = true
+        },
+        new ParameterPropertyDef("user_goal_description", "user original goal")
+        {
+            Required = true
+        },
+        new ParameterPropertyDef("user_goal_agent", "agent who can achieve user original goal")
+        {
+            Required = true
+        },
+        new ParameterPropertyDef("args", "useful parameters of next action agent, format: { }")
+        {
+            Type = "object"
+        }
     };
-
-    public bool IsReasoning => false;
 
     public RouteToAgentRoutingHandler(IServiceProvider services, ILogger<RouteToAgentRoutingHandler> logger, RoutingSettings settings) 
         : base(services, logger, settings)
     {
     }
 
-    public async Task<RoleDialogModel> Handle(IRoutingService routing, FunctionCallFromLlm inst)
+    public async Task<bool> Handle(IRoutingService routing, FunctionCallFromLlm inst, RoleDialogModel message)
     {
-        var function = _services.GetServices<IFunctionCallback>().FirstOrDefault(x => x.Name == inst.Function);
-        var message = new RoleDialogModel(AgentRole.Function, inst.Question)
+        message.FunctionArgs = JsonSerializer.Serialize(inst);
+        var ret = await routing.InvokeFunction(message.FunctionName, message);
+
+        var states = _services.GetRequiredService<IConversationStateService>();
+        var goalAgent = states.GetState("user_goal_agent");
+        if (!string.IsNullOrEmpty(goalAgent))
         {
-            FunctionName = inst.Function,
-            FunctionArgs = JsonSerializer.Serialize(inst),
-            CurrentAgentId = routing.Dialogs.Last().CurrentAgentId
-        };
+            inst.OriginalAgent = goalAgent;
+        }
+        await HookEmitter.Emit<IRoutingHook>(_services, async hook =>
+            await hook.OnRoutingInstructionRevised(inst, message)
+        );
 
-        var ret = await function.Execute(message);
+        var agentId = routing.Context.GetCurrentAgentId();
 
-        var context = _services.GetRequiredService<RoutingContext>();
-        var result = await routing.InvokeAgent(context.CurrentAgentId);
-        // Keep last message data for debug
-        result.ExecutionData = result.ExecutionData ?? message.ExecutionData;
-        result.FunctionName = result.FunctionName ?? message.FunctionName;
-        return result;
+        // Update next action agent's name
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var agent = await agentService.LoadAgent(agentId);
+        inst.AgentName = agent.Name;
+
+        if (inst.ExecutingDirectly)
+        {
+            message.Content = inst.Question;
+        }
+
+        if (agent.Disabled)
+        {
+            var content = $"This agent ({agent.Name}) is disabled, please install the corresponding plugin ({agent.Plugin.Name}) to activate this agent.";
+
+            message = RoleDialogModel.From(message,
+                role: AgentRole.Assistant,
+                content: content);
+            _dialogs.Add(message);
+        }
+        else
+        {
+            ret = await routing.InvokeAgent(agentId, _dialogs);
+        }
+
+        var response = _dialogs.Last();
+        inst.Response = response.Content;
+
+        return true;
     }
 }

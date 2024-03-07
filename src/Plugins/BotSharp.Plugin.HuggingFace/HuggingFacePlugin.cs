@@ -1,4 +1,5 @@
 using BotSharp.Abstraction.Plugins;
+using BotSharp.Abstraction.Settings;
 using BotSharp.Plugin.HuggingFace.Providers;
 using BotSharp.Plugin.HuggingFace.Services;
 using BotSharp.Plugin.HuggingFace.Settings;
@@ -8,14 +9,18 @@ namespace BotSharp.Plugin.HuggingFace;
 
 public class HuggingFacePlugin : IBotSharpPlugin
 {
+    public string Id => "4495c3d6-49bd-464e-92fb-c99049854cb7";
+    public string Name => "Hugging Face";
+    public string Description => "The Home of Machine Learning - Create, discover and collaborate on ML better.";
+    public string IconUrl => "https://upload.wikimedia.org/wikipedia/he/e/ee/Hugging_Face_logo.png";
     public void RegisterDI(IServiceCollection services, IConfiguration config)
     {
         var settings = new HuggingFaceSettings();
         config.Bind("HuggingFace", settings);
-        services.AddSingleton(x =>
+        services.AddScoped(provider =>
         {
-            Console.WriteLine($"Loaded HuggingFace settings: {settings.EndPoint} ({settings.Model}) {settings.Token.SubstringMax(4)}");
-            return settings;
+            var settingService = provider.GetRequiredService<ISettingService>();
+            return settingService.Bind<HuggingFaceSettings>("HuggingFace");
         });
 
         services

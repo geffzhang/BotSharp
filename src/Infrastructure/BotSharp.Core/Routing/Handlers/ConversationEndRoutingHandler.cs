@@ -10,21 +10,29 @@ public class ConversationEndRoutingHandler : RoutingHandlerBase, IRoutingHandler
 
     public string Description => "User completed his task and wants to end the conversation.";
 
-    public bool IsReasoning => false;
+    public List<ParameterPropertyDef> Parameters => new List<ParameterPropertyDef>
+    {
+        new ParameterPropertyDef("reason", "why end conversation"),
+        new ParameterPropertyDef("response", "response content to user")
+    };
 
     public ConversationEndRoutingHandler(IServiceProvider services, ILogger<ConversationEndRoutingHandler> logger, RoutingSettings settings) 
         : base(services, logger, settings)
     {
     }
 
-    public async Task<RoleDialogModel> Handle(IRoutingService routing, FunctionCallFromLlm inst)
+
+    public async Task<bool> Handle(IRoutingService routing, FunctionCallFromLlm inst, RoleDialogModel message)
     {
-        var result = new RoleDialogModel(AgentRole.Assistant, inst.Response)
+        var response = new RoleDialogModel(AgentRole.Assistant, inst.Response)
         {
-            CurrentAgentId = _settings.RouterId,
-            FunctionName = inst.Function,
-            ExecutionData = inst
+            CurrentAgentId = message.CurrentAgentId,
+            MessageId = message.MessageId,
+            StopCompletion = true,
+            FunctionName = inst.Function
         };
+
+        _dialogs.Add(response);
 
         var hooks = _services.GetServices<IConversationHook>()
             .OrderBy(x => x.Priority)
@@ -32,9 +40,9 @@ public class ConversationEndRoutingHandler : RoutingHandlerBase, IRoutingHandler
 
         foreach (var hook in hooks)
         {
-            await hook.ConversationEnding(result);
+            await hook.OnConversationEnding(response);
         }
 
-        return result;
+        return true;
     }
 }

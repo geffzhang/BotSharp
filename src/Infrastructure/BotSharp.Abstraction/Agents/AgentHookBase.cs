@@ -5,6 +5,8 @@ namespace BotSharp.Abstraction.Agents;
 
 public abstract class AgentHookBase : IAgentHook
 {
+    public virtual string SelfId => throw new NotImplementedException("Please set SelfId as agent id!");
+
     protected Agent _agent;
     public Agent Agent => _agent;
     
@@ -41,7 +43,7 @@ public abstract class AgentHookBase : IAgentHook
         return true;
     }
 
-    public virtual bool OnSamplesLoaded(ref string samples)
+    public virtual bool OnSamplesLoaded(List<string> samples)
     {
         _agent.Samples = samples;
         return true;

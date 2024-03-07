@@ -1,3 +1,6 @@
+using BotSharp.Abstraction.Agents;
+using BotSharp.Abstraction.Loggers;
+
 namespace BotSharp.Plugin.LLamaSharp.Providers;
 
 public class ChatCompletionProvider : IChatCompletion
@@ -18,13 +21,16 @@ public class ChatCompletionProvider : IChatCompletion
 
     public string Provider => "llama-sharp";
 
-    public RoleDialogModel GetChatCompletions(Agent agent, List<RoleDialogModel> conversations)
+    public async Task<RoleDialogModel> GetChatCompletions(Agent agent, List<RoleDialogModel> conversations)
     {
         var hooks = _services.GetServices<IContentGeneratingHook>().ToList();
 
         // Before chat completion hook
-        Task.WaitAll(hooks.Select(hook =>
-            hook.BeforeGenerating(agent, conversations)).ToArray());
+        // Before chat completion hook
+        foreach (var hook in hooks)
+        {
+            await hook.BeforeGenerating(agent, conversations);
+        }
 
         var content = string.Join("\r\n", conversations.Select(x => $"{x.Role}: {x.Content}")).Trim();
         content += $"\r\n{AgentRole.Assistant}: ";
@@ -37,23 +43,19 @@ public class ChatCompletionProvider : IChatCompletion
         {
             Temperature = 0.1f,
             AntiPrompts = new List<string> { $"{AgentRole.User}:", "[/INST]" },
-            MaxTokens = 64
+            MaxTokens = 128
         };
 
         string totalResponse = "";
 
-        var prompt = agent.Instruction + "\r\n" + content;
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var instruction = agentService.RenderedInstruction(agent);
+        var prompt = instruction + "\r\n" + content;
 
-        var convSetting = _services.GetRequiredService<ConversationSetting>();
-        if (convSetting.ShowVerboseLog)
+        await foreach(var text in Spinner(executor.InferAsync(prompt, inferenceParams)))
         {
-            _logger.LogInformation(prompt);
-        }
-
-        foreach (var response in executor.Infer(prompt, inferenceParams))
-        {
-            Console.Write(response);
-            totalResponse += response;
+            Console.Write(text);
+            totalResponse += text;
         }
 
         foreach (var anti in inferenceParams.AntiPrompts)
@@ -67,13 +69,38 @@ public class ChatCompletionProvider : IChatCompletion
         };
 
         // After chat completion hook
-        Task.WaitAll(hooks.Select(hook =>
-            hook.AfterGenerated(msg, new TokenStatsModel
+        foreach (var hook in hooks)
+        {
+            await hook.AfterGenerated(msg, new TokenStatsModel
             {
+                Prompt = prompt,
+                Provider = Provider,
                 Model = _model
-            })).ToArray());
+            });
+        }
 
         return msg;
+    }
+
+    public async IAsyncEnumerable<string> Spinner(IAsyncEnumerable<string> source)
+    {
+        var enumerator = source.GetAsyncEnumerator();
+
+        var characters = new[] { '|', '/', '-', '\\' };
+
+        while (true)
+        {
+            var next = enumerator.MoveNextAsync();
+
+            while (!next.IsCompleted)
+            {
+                await Task.Delay(75);
+            }
+
+            if (!next.Result)
+                break;
+            yield return enumerator.Current;
+        }
     }
 
     public async Task<bool> GetChatCompletionsAsync(Agent agent,
@@ -108,7 +135,7 @@ public class ChatCompletionProvider : IChatCompletion
             _logger.LogInformation(prompt);
         }
 
-        foreach (var response in executor.Infer(prompt, inferenceParams))
+        await foreach (var response in executor.InferAsync(prompt, inferenceParams))
         {
             Console.Write(response);
             totalResponse += response;
@@ -151,7 +178,7 @@ public class ChatCompletionProvider : IChatCompletion
             _logger.LogInformation(agent.Instruction);
         }
 
-        foreach (var response in executor.Infer(agent.Instruction, inferenceParams))
+        await foreach (var response in executor.InferAsync(agent.Instruction, inferenceParams))
         {
             Console.Write(response);
             totalResponse += response;

@@ -4,6 +4,10 @@ namespace BotSharp.Abstraction.Agents;
 
 public interface IAgentHook
 {
+    /// <summary>
+    /// Agent Id
+    /// </summary>
+    string SelfId { get; }
     Agent Agent { get; }
     void SetAget(Agent agent);
 
@@ -19,7 +23,7 @@ public interface IAgentHook
 
     bool OnFunctionsLoaded(List<FunctionDef> functions);
 
-    bool OnSamplesLoaded(ref string samples);
+    bool OnSamplesLoaded(List<string> samples);
 
     /// <summary>
     /// Triggered when agent is loaded completely.

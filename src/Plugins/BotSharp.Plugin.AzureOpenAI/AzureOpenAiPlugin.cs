@@ -1,7 +1,7 @@
+using BotSharp.Abstraction.Evaluations.Settings;
 using BotSharp.Abstraction.MLTasks;
 using BotSharp.Abstraction.Plugins;
-using BotSharp.Abstraction.Utilities;
-using BotSharp.Plugin.AzureOpenAI.Hooks;
+using BotSharp.Abstraction.Settings;
 using BotSharp.Plugin.AzureOpenAI.Providers;
 using BotSharp.Plugin.AzureOpenAI.Settings;
 using Microsoft.Extensions.Configuration;
@@ -15,21 +15,20 @@ namespace BotSharp.Platform.AzureAi;
 /// </summary>
 public class AzureOpenAiPlugin : IBotSharpPlugin
 {
+    public string Id => "65185362-392c-44fd-a023-95a198824436";
     public string Name => "Azure OpenAI";
-    public string Description => "Azure OpenAI Service";
+    public string Description => "Azure OpenAI Service including text generation, text to image and other AI services.";
+    public string IconUrl => "https://nanfor.com/cdn/shop/files/cursos-propios-Azure-openAI.jpg?v=1692877741";
 
     public void RegisterDI(IServiceCollection services, IConfiguration config)
     {
-        var settings = new AzureOpenAiSettings();
-        config.Bind("AzureOpenAi", settings);
-        services.AddSingleton(x =>
+        services.AddScoped(provider =>
         {
-            Console.WriteLine($"Loaded AzureOpenAi settings: {settings.DeploymentModel} ({settings.Endpoint}) {settings.ApiKey.SubstringMax(4)}");
-            return settings;
+            var settingService = provider.GetRequiredService<ISettingService>();
+            return settingService.Bind<AzureOpenAiSettings>("AzureOpenAi");
         });
 
         services.AddScoped<ITextCompletion, TextCompletionProvider>();
         services.AddScoped<IChatCompletion, ChatCompletionProvider>();
-        services.AddScoped<IContentGeneratingHook, TokenStatsConversationHook>();
     }
 }

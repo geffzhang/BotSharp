@@ -1,6 +1,3 @@
-using BotSharp.Abstraction.Conversations.Models;
-using BotSharp.Abstraction.Repositories;
-
 namespace BotSharp.Core.Conversations.Services;
 
 public partial class ConversationService : IConversationService
@@ -12,6 +9,7 @@ public partial class ConversationService : IConversationService
     private readonly IConversationStorage _storage;
     private readonly IConversationStateService _state;
     private string _conversationId;
+    public string ConversationId => _conversationId;
 
     public IConversationStateService States => _state;
 
@@ -31,11 +29,20 @@ public partial class ConversationService : IConversationService
         _logger = logger;
     }
 
-    public Task DeleteConversation(string id)
+    public async Task<bool> DeleteConversations(IEnumerable<string> ids)
     {
-        throw new NotImplementedException();
+        var db = _services.GetRequiredService<IBotSharpRepository>();
+        var isDeleted = db.DeleteConversations(ids);
+        return await Task.FromResult(isDeleted);
     }
 
+    public async Task<Conversation> UpdateConversationTitle(string id, string title)
+    {
+        var db = _services.GetRequiredService<IBotSharpRepository>();
+        db.UpdateConversationTitle(id, title);
+        var conversation = db.GetConversation(id);
+        return conversation;
+    }
     public async Task<Conversation> GetConversation(string id)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
@@ -43,20 +50,29 @@ public partial class ConversationService : IConversationService
         return conversation;
     }
 
-    public async Task<List<Conversation>> GetConversations()
+    public async Task<PagedItems<Conversation>> GetConversations(ConversationFilter filter)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var user = db.Users.FirstOrDefault(x => x.ExternalId == _user.Id);
-        var conversations = db.GetConversations(user?.Id);
-        return conversations.OrderByDescending(x => x.CreatedTime).ToList();
+        var conversations = db.GetConversations(filter);
+        return conversations;
+    }
+
+    public async Task<List<Conversation>> GetLastConversations()
+    {
+        var db = _services.GetRequiredService<IBotSharpRepository>();
+        return db.GetLastConversations();
+    }
+
+    public async Task<List<string>> GetIdleConversations(int batchSize, int messageLimit, int bufferHours)
+    {
+        var db = _services.GetRequiredService<IBotSharpRepository>();
+        return db.GetIdleConversations(batchSize, messageLimit, bufferHours);
     }
 
     public async Task<Conversation> NewConversation(Conversation sess)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var dbSettings = _services.GetRequiredService<BotSharpDatabaseSettings>();
-        var conversationSettings = _services.GetRequiredService<ConversationSetting>();
-        var user = db.Users.FirstOrDefault(x => x.ExternalId == _user.Id);
+        var user = db.GetUserById(_user.Id);
         var foundUserId = user?.Id ?? string.Empty;
 
         var record = sess;
@@ -69,6 +85,9 @@ public partial class ConversationService : IConversationService
         var hooks = _services.GetServices<IConversationHook>().ToList();
         foreach (var hook in hooks)
         {
+            // If user connect agent first time
+            await hook.OnUserAgentConnectedInitially(sess);
+
             await hook.OnConversationInitialized(record);
         }
 
@@ -80,11 +99,15 @@ public partial class ConversationService : IConversationService
         throw new NotImplementedException();
     }
 
-    public List<RoleDialogModel> GetDialogHistory(int lastCount = 20)
+    public List<RoleDialogModel> GetDialogHistory(int lastCount = 50)
     {
+        if (string.IsNullOrEmpty(_conversationId))
+        {
+            throw new ArgumentNullException("ConversationId is null.");
+        }
+
         var dialogs = _storage.GetDialogs(_conversationId);
         return dialogs
-            .Where(x => x.CreatedAt > DateTime.UtcNow.AddHours(-8))
             .TakeLast(lastCount)
             .ToList();
     }

@@ -1,5 +1,7 @@
-using BotSharp.Abstraction.Agents.Models;
-using BotSharp.Abstraction.Repositories;
+using BotSharp.Abstraction.Loggers.Models;
+using BotSharp.Abstraction.Plugins.Models;
+using BotSharp.Abstraction.Repositories.Models;
+using BotSharp.Abstraction.Tasks.Models;
 using BotSharp.Abstraction.Users.Models;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 
@@ -14,7 +16,6 @@ public class BotSharpDbContext : Database, IBotSharpRepository
     public IQueryable<UserAgent> UserAgents => throw new NotImplementedException();
 
     public IQueryable<Conversation> Conversations => throw new NotImplementedException();
-
 
     public int Transaction<TTableInterface>(Action action)
     {
@@ -65,9 +66,23 @@ public class BotSharpDbContext : Database, IBotSharpRepository
         }
     }
 
+    #region Plugin
+    public PluginConfig GetPluginConfig() => throw new NotImplementedException(); 
+    public void SavePluginConfig(PluginConfig config) => throw new NotImplementedException();
+    #endregion
 
     #region Agent
     public Agent GetAgent(string agentId)
+    {
+        throw new NotImplementedException();
+    }
+
+    public List<Agent> GetAgents(AgentFilter filter)
+    {
+        throw new NotImplementedException();
+    }
+
+    public List<Agent> GetAgentsByUser(string userId)
     {
         throw new NotImplementedException();
     }
@@ -86,11 +101,67 @@ public class BotSharpDbContext : Database, IBotSharpRepository
     {
         throw new NotImplementedException();
     }
+
+    public void BulkInsertAgents(List<Agent> agents)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void BulkInsertUserAgents(List<UserAgent> userAgents)
+    {
+        throw new NotImplementedException();
+    }
+
+    public bool DeleteAgents()
+    {
+        throw new NotImplementedException();
+    }
     #endregion
 
+    #region Agent Task
+    public PagedItems<AgentTask> GetAgentTasks(AgentTaskFilter filter)
+    {
+        throw new NotImplementedException();
+    }
+
+    public AgentTask? GetAgentTask(string agentId, string taskId)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void InsertAgentTask(AgentTask task)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void BulkInsertAgentTasks(List<AgentTask> tasks)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void UpdateAgentTask(AgentTask task, AgentTaskField field)
+    {
+        throw new NotImplementedException();
+    }
+
+    public bool DeleteAgentTask(string agentId, string taskId)
+    {
+        throw new NotImplementedException();
+    }
+
+    public bool DeleteAgentTasks()
+    {
+        throw new NotImplementedException();
+    }
+    #endregion
 
     #region Conversation
     public void CreateNewConversation(Conversation conversation)
+    {
+        throw new NotImplementedException();
+    }
+
+    public bool DeleteConversations(IEnumerable<string> conversationIds)
     {
         throw new NotImplementedException();
     }
@@ -100,40 +171,119 @@ public class BotSharpDbContext : Database, IBotSharpRepository
         throw new NotImplementedException();
     }
 
-    public List<Conversation> GetConversations(string userId)
+    public PagedItems<Conversation> GetConversations(ConversationFilter filter)
     {
         throw new NotImplementedException();
     }
 
-    public string GetConversationDialog(string conversationId)
+    public List<Conversation> GetLastConversations()
     {
         throw new NotImplementedException();
     }
 
-    public List<StateKeyValue> GetConversationStates(string conversationId)
+    public List<string> GetIdleConversations(int batchSize, int messageLimit, int bufferHours)
     {
         throw new NotImplementedException();
     }
 
-    public void UpdateConversationDialog(string conversationId, string dialogs)
+    public List<DialogElement> GetConversationDialogs(string conversationId)
     {
         throw new NotImplementedException();
     }
 
+    public void UpdateConversationDialogElements(string conversationId, List<DialogContentUpdateModel> updateElements)
+    {
+        throw new NotImplementedException();
+    }
+
+    public ConversationState GetConversationStates(string conversationId)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void AppendConversationDialogs(string conversationId, List<DialogElement> dialogs)
+    {
+        throw new NotImplementedException();
+    }
+    public void UpdateConversationTitle(string conversationId, string title)
+    {
+        throw new NotImplementedException();
+    }
     public void UpdateConversationStates(string conversationId, List<StateKeyValue> states)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void UpdateConversationStatus(string conversationId, string status)
+    {
+        throw new NotImplementedException();
+    }
+
+    public bool TruncateConversation(string conversationId, string messageId, bool cleanLog = false)
+    {
+        throw new NotImplementedException();
+    }
+    #endregion
+    
+    #region User
+    public User? GetUserByEmail(string email) 
+        => throw new NotImplementedException();
+
+    public User? GetUserById(string id) 
+        => throw new NotImplementedException();
+
+    public User? GetUserByUserName(string userName) 
+        => throw new NotImplementedException();
+
+    public void CreateUser(User user) 
+        => throw new NotImplementedException();
+    #endregion
+
+    #region Execution Log
+    public void AddExecutionLogs(string conversationId, List<string> logs)
+    {
+        throw new NotImplementedException();
+    }
+
+    public List<string> GetExecutionLogs(string conversationId)
     {
         throw new NotImplementedException();
     }
     #endregion
 
+    #region LLM Completion Log
+    public void SaveLlmCompletionLog(LlmCompletionLog log)
+    {
+        throw new NotImplementedException();
+    }
+    #endregion
 
-    #region User
-    public User GetUserByEmail(string email)
+    #region Conversation Content Log
+    public void SaveConversationContentLog(ContentLogOutputModel log)
     {
         throw new NotImplementedException();
     }
 
-    public void CreateUser(User user)
+    public List<ContentLogOutputModel> GetConversationContentLogs(string conversationId)
+    {
+        throw new NotImplementedException();
+    }
+    #endregion
+
+    #region Conversation State Log
+    public void SaveConversationStateLog(ConversationStateLogModel log)
+    {
+        throw new NotImplementedException();
+    }
+
+    public List<ConversationStateLogModel> GetConversationStateLogs(string conversationId)
+    {
+        throw new NotImplementedException();
+    }
+    #endregion
+
+    #region Stats
+    public void IncrementConversationCount()
     {
         throw new NotImplementedException();
     }

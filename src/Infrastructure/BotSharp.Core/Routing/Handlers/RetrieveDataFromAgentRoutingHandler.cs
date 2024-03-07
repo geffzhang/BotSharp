@@ -1,62 +1,62 @@
 using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Models;
-using BotSharp.Abstraction.Repositories;
 using BotSharp.Abstraction.Routing;
+using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Abstraction.Routing.Settings;
+using BotSharp.Core.Routing.Planning;
 
 namespace BotSharp.Core.Routing.Handlers;
 
+/// <summary>
+/// Retrieve information from specific agent
+/// </summary>
 public class RetrieveDataFromAgentRoutingHandler : RoutingHandlerBase, IRoutingHandler
 {
     public string Name => "retrieve_data_from_agent";
 
     public string Description => "Retrieve data from appropriate agent.";
 
-    public List<NameDesc> Parameters => new List<NameDesc>
+    public List<ParameterPropertyDef> Parameters => new List<ParameterPropertyDef>
     {
-        new NameDesc("agent", "the name of the agent"),
-        new NameDesc("question", "the question you will ask the agent to get the necessary data"),
-        new NameDesc("reason", "why retrieve data"),
-        new NameDesc("args", "required parameters extracted from question and hand over to the next agent")
+        new ParameterPropertyDef("reason", "why choose this function"),
+        new ParameterPropertyDef("question", "the question you will ask the next action agent to get the necessary information"),
+        new ParameterPropertyDef("next_action_agent", "agent that can handle the question"),
+        new ParameterPropertyDef("user_goal_agent", "agent that can achieve user original goal"),
+        new ParameterPropertyDef("args", "required parameters extracted from question and hand over to the next agent")
+        {
+            Type = "object"
+        }
     };
 
-    public bool IsReasoning => true;
+    public List<string> Planers => new List<string>
+    {
+        nameof(HFPlanner)
+    };
 
     public RetrieveDataFromAgentRoutingHandler(IServiceProvider services, ILogger<RetrieveDataFromAgentRoutingHandler> logger, RoutingSettings settings) 
         : base(services, logger, settings)
     {
     }
 
-    public async Task<RoleDialogModel> Handle(IRoutingService routing, FunctionCallFromLlm inst)
+    public async Task<bool> Handle(IRoutingService routing, FunctionCallFromLlm inst, RoleDialogModel message)
     {
-        // Retrieve information from specific agent
-        var db = _services.GetRequiredService<IBotSharpRepository>();
-        var record = db.Agents.First(x => x.Name.ToLower() == inst.AgentName.ToLower());
-        var response = await routing.InvokeAgent(record.Id);
+        var context = _services.GetRequiredService<IRoutingContext>();
+        var agentId = context.GetCurrentAgentId();
+        var dialogs = new List<RoleDialogModel>
+        {
+            new RoleDialogModel(AgentRole.User, inst.Question)
+            {
+                CurrentAgentId = agentId,
+                MessageId = message.MessageId
+            }
+        };
 
+        var ret = await routing.InvokeAgent(agentId, dialogs);
+        var response = dialogs.Last();
         inst.Response = response.Content;
 
-        /*_dialogs.Add(new RoleDialogModel(AgentRole.Assistant, inst.Parameters.Question)
-        {
-            CurrentAgentId = record.Id
-        });*/
+        // Add final response to parent dialog
+        _dialogs.Add(response);
 
-        _router.Instruction += $"\r\n{AgentRole.Assistant}: {inst.Question}";
-
-        /*_dialogs.Add(new RoleDialogModel(AgentRole.Function, inst.Parameters.Answer)
-        {
-            FunctionName = inst.Function,
-            FunctionArgs = JsonSerializer.Serialize(inst.Parameters.Arguments),
-            ExecutionResult = inst.Parameters.Answer,
-            ExecutionData = response.ExecutionData,
-            CurrentAgentId = record.Id
-        });*/
-
-        _router.Instruction += $"\r\n{AgentRole.Function}: {response.Content}";
-
-        // Got the response from agent, then send to reasoner again to make the decision
-        // inst = await GetNextInstructionFromReasoner($"What's the next step based on user's original goal and function result?");
-
-        return null;
+        return ret;
     }
 }

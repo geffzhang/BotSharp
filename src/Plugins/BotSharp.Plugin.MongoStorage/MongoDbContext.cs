@@ -10,10 +10,10 @@ public class MongoDbContext
 
     public MongoDbContext(BotSharpDatabaseSettings dbSettings)
     {
-        var mongoDbConnectionString = dbSettings.MongoDb;
+        var mongoDbConnectionString = dbSettings.BotSharpMongoDb;
         _mongoClient = new MongoClient(mongoDbConnectionString);
         _mongoDbDatabaseName = GetDatabaseName(mongoDbConnectionString);
-        _collectionPrefix = dbSettings.TablePrefix;
+        _collectionPrefix = dbSettings.TablePrefix.IfNullOrEmptyAs("BotSharp");
     }
 
     private string GetDatabaseName(string mongoDbConnectionString)
@@ -28,18 +28,93 @@ public class MongoDbContext
 
     private IMongoDatabase Database { get { return _mongoClient.GetDatabase(_mongoDbDatabaseName); } }
 
-    public IMongoCollection<AgentCollection> Agents
-        => Database.GetCollection<AgentCollection>($"{_collectionPrefix}_Agents");
+    #region Indexes
+    private IMongoCollection<ConversationDocument> CreateConversationIndex()
+    {
+        var collection = Database.GetCollection<ConversationDocument>($"{_collectionPrefix}_Conversations");
+        var indexes = collection.Indexes.List().ToList();
+        var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
+        if (createTimeIndex == null)
+        {
+            var indexDef = Builders<ConversationDocument>.IndexKeys.Descending(x => x.CreatedTime);
+            collection.Indexes.CreateOne(new CreateIndexModel<ConversationDocument>(indexDef));
+        }
+        return collection;
+    }
 
-    public IMongoCollection<ConversationCollection> Conversations
-        => Database.GetCollection<ConversationCollection>($"{_collectionPrefix}_Conversations");
+    private IMongoCollection<AgentTaskDocument> CreateAgentTaskIndex()
+    {
+        var collection = Database.GetCollection<AgentTaskDocument>($"{_collectionPrefix}_AgentTasks");
+        var indexes = collection.Indexes.List().ToList();
+        var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
+        if (createTimeIndex == null)
+        {
+            var indexDef = Builders<AgentTaskDocument>.IndexKeys.Descending(x => x.CreatedTime);
+            collection.Indexes.CreateOne(new CreateIndexModel<AgentTaskDocument>(indexDef));
+        }
+        return collection;
+    }
 
-    public IMongoCollection<ConversationDialogCollection> ConversationDialogs
-        => Database.GetCollection<ConversationDialogCollection>($"{_collectionPrefix}_ConversationDialogs");
+    private IMongoCollection<ConversationContentLogDocument> CreateContentLogIndex()
+    {
+        var collection = Database.GetCollection<ConversationContentLogDocument>($"{_collectionPrefix}_ConversationContentLogs");
+        var indexes = collection.Indexes.List().ToList();
+        var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreateTime"));
+        if (createTimeIndex == null)
+        {
+            var indexDef = Builders<ConversationContentLogDocument>.IndexKeys.Ascending(x => x.CreateTime);
+            collection.Indexes.CreateOne(new CreateIndexModel<ConversationContentLogDocument>(indexDef));
+        }
+        return collection;
+    }
 
-    public IMongoCollection<UserCollection> Users
-        => Database.GetCollection<UserCollection>($"{_collectionPrefix}_Users");
+    private IMongoCollection<ConversationStateLogDocument> CreateStateLogIndex()
+    {
+        var collection = Database.GetCollection<ConversationStateLogDocument>($"{_collectionPrefix}_ConversationStateLogs");
+        var indexes = collection.Indexes.List().ToList();
+        var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreateTime"));
+        if (createTimeIndex == null)
+        {
+            var indexDef = Builders<ConversationStateLogDocument>.IndexKeys.Ascending(x => x.CreateTime);
+            collection.Indexes.CreateOne(new CreateIndexModel<ConversationStateLogDocument>(indexDef));
+        }
+        return collection;
+    }
+    #endregion
 
-    public IMongoCollection<UserAgentCollection> UserAgents
-        => Database.GetCollection<UserAgentCollection>($"{_collectionPrefix}_UserAgents");
+    public IMongoCollection<AgentDocument> Agents
+        => Database.GetCollection<AgentDocument>($"{_collectionPrefix}_Agents");
+
+    public IMongoCollection<AgentTaskDocument> AgentTasks
+        => CreateAgentTaskIndex();
+
+    public IMongoCollection<ConversationDocument> Conversations
+        => CreateConversationIndex();
+
+    public IMongoCollection<ConversationDialogDocument> ConversationDialogs
+        => Database.GetCollection<ConversationDialogDocument>($"{_collectionPrefix}_ConversationDialogs");
+
+    public IMongoCollection<ConversationStateDocument> ConversationStates
+        => Database.GetCollection<ConversationStateDocument>($"{_collectionPrefix}_ConversationStates");
+
+    public IMongoCollection<ExecutionLogDocument> ExectionLogs
+        => Database.GetCollection<ExecutionLogDocument>($"{_collectionPrefix}_ExecutionLogs");
+
+    public IMongoCollection<LlmCompletionLogDocument> LlmCompletionLogs
+        => Database.GetCollection<LlmCompletionLogDocument>($"{_collectionPrefix}_LlmCompletionLogs");
+
+    public IMongoCollection<ConversationContentLogDocument> ContentLogs
+        => CreateContentLogIndex();
+
+    public IMongoCollection<ConversationStateLogDocument> StateLogs
+        => CreateStateLogIndex();
+
+    public IMongoCollection<UserDocument> Users
+        => Database.GetCollection<UserDocument>($"{_collectionPrefix}_Users");
+
+    public IMongoCollection<UserAgentDocument> UserAgents
+        => Database.GetCollection<UserAgentDocument>($"{_collectionPrefix}_UserAgents");
+
+    public IMongoCollection<PluginDocument> Plugins
+        => Database.GetCollection<PluginDocument>($"{_collectionPrefix}_Plugins");
 }

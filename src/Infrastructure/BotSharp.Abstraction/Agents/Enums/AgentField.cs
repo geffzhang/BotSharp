@@ -7,11 +7,24 @@ public enum AgentField
     Description,
     IsPublic,
     Disabled,
-    AllowRouting,
+    Type,
+    InheritAgentId,
     Profiles,
-    RoutingRules,
+    RoutingRule,
     Instruction,
     Function,
     Template,
-    Response
+    Response,
+    Sample,
+    LlmConfig
+}
+
+public enum AgentTaskField
+{
+    All = 1,
+    Name,
+    Description,
+    Enabled,
+    Content,
+    DirectAgentId
 }

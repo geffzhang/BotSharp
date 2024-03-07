@@ -1,6 +1,6 @@
 namespace BotSharp.Plugin.KnowledgeBase.Services;
 
-public class KnowledgeService : IKnowledgeService
+public partial class KnowledgeService : IKnowledgeService
 {
     private readonly IServiceProvider _services;
     private readonly KnowledgeBaseSettings _settings;
@@ -13,6 +13,29 @@ public class KnowledgeService : IKnowledgeService
         _services = services;
         _settings = settings;
         _textChopper = textChopper;
+    }
+
+    public async Task EmbedKnowledge(KnowledgeCreationModel knowledge)
+    {
+        var idStart = 0;
+        var lines = _textChopper.Chop(knowledge.Content, new ChunkOption
+        {
+            Size = 1024,
+            Conjunction = 32,
+            SplitByWord = true,
+        });
+
+        var db = GetVectorDb();
+        var textEmbedding = GetTextEmbedding();
+
+        await db.CreateCollection("shared", textEmbedding.Dimension);
+        foreach (var line in lines)
+        {
+            var vec = await textEmbedding.GetVectorAsync(line);
+            await db.Upsert("shared", idStart, vec, line);
+            idStart++;
+            Console.WriteLine($"Saved vector {idStart}/{lines.Count}: {line}\n");
+        }
     }
 
     public async Task Feed(KnowledgeFeedModel knowledge)
@@ -31,7 +54,7 @@ public class KnowledgeService : IKnowledgeService
         await db.CreateCollection(knowledge.AgentId, textEmbedding.Dimension);
         foreach (var line in lines)
         {
-            var vec = textEmbedding.GetVector(line);
+            var vec = await textEmbedding.GetVectorAsync(line);
             await db.Upsert(knowledge.AgentId, idStart, vec, line);
             idStart++;
             Console.WriteLine($"Saved vector {idStart}/{lines.Count}: {line}\n");
@@ -41,10 +64,11 @@ public class KnowledgeService : IKnowledgeService
     public async Task<string> GetKnowledges(KnowledgeRetrievalModel retrievalModel)
     {
         var textEmbedding = GetTextEmbedding();
-        var vector = textEmbedding.GetVector(retrievalModel.Question);
+        var vector = await textEmbedding.GetVectorAsync(retrievalModel.Question);
 
         // Vector search
-        var result = await GetVectorDb().Search(retrievalModel.AgentId, vector, limit: 10);
+        var db = GetVectorDb();
+        var result = await db.Search("shared", vector, limit: 10);
 
         // Restore 
         return string.Join("\n\n", result.Select((x, i) => $"### Paragraph {i + 1} ###\n{x.Trim()}"));
@@ -67,7 +91,7 @@ public class KnowledgeService : IKnowledgeService
         sb.AppendLine("ANSWER: ");
         prompt = sb.ToString().Trim();
 
-        var completion = await GetTextCompletion().GetCompletion(prompt);
+        var completion = await GetTextCompletion().GetCompletion(prompt, Guid.Empty.ToString(), Guid.Empty.ToString());
         return JsonSerializer.Deserialize<List<RetrievedResult>>(completion);
     }
 

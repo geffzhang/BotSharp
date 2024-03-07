@@ -8,6 +8,7 @@ public class AgentCreationModel
 {
     public string Name { get; set; }
     public string Description { get; set; }
+    public string Type { get; set; } = AgentType.Task;
 
     /// <summary>
     /// LLM default system instructions
@@ -17,7 +18,7 @@ public class AgentCreationModel
     /// <summary>
     /// LLM extensible Instructions in addition to the default Instructions
     /// </summary>
-    public List<AgentTemplate>? Templates { get; set; }
+    public List<AgentTemplate> Templates { get; set; } = new List<AgentTemplate>();
 
     /// <summary>
     /// LLM callable function definition
@@ -27,7 +28,8 @@ public class AgentCreationModel
     /// <summary>
     /// Response template
     /// </summary>
-    public List<AgentResponse>? Responses { get; set; }
+    public List<AgentResponse> Responses { get; set; } = new List<AgentResponse>();
+    public List<string> Samples { get; set; } = new List<string>();
 
     public bool IsPublic { get; set; }
 
@@ -42,6 +44,7 @@ public class AgentCreationModel
     /// </summary>
     public List<string> Profiles { get; set; } = new List<string>();
     public List<RoutingRuleUpdateModel> RoutingRules { get; set; } = new List<RoutingRuleUpdateModel>();
+    public AgentLlmConfig? LlmConfig { get; set; }
 
     public Agent ToAgent()
     {
@@ -53,13 +56,15 @@ public class AgentCreationModel
             Templates = Templates,
             Functions = Functions,
             Responses = Responses,
+            Samples = Samples,
             IsPublic = IsPublic,
-            AllowRouting = AllowRouting,
+            Type = Type,
             Disabled = Disabled,
             Profiles = Profiles,
             RoutingRules = RoutingRules?
                 .Select(x => RoutingRuleUpdateModel.ToDomainElement(x))?
-                .ToList() ?? new List<RoutingRule>()
+                .ToList() ?? new List<RoutingRule>(),
+            LlmConfig = LlmConfig
         };
     }
 }

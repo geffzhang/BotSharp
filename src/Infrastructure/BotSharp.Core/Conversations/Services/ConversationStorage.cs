@@ -1,6 +1,8 @@
-using BotSharp.Abstraction.Agents.Enums;
+using BotSharp.Abstraction.Messaging;
+using BotSharp.Abstraction.Messaging.JsonConverters;
+using BotSharp.Abstraction.Messaging.Models.RichContent;
 using BotSharp.Abstraction.Repositories;
-using BotSharp.Abstraction.Routing.Settings;
+using System;
 using System.IO;
 
 namespace BotSharp.Core.Conversations.Services;
@@ -8,87 +10,117 @@ namespace BotSharp.Core.Conversations.Services;
 public class ConversationStorage : IConversationStorage
 {
     private readonly BotSharpDatabaseSettings _dbSettings;
-    private readonly AgentSettings _agentSettings;
     private readonly IServiceProvider _services;
-    private readonly IUserIdentity _user;
+    private readonly JsonSerializerOptions _options;
+
     public ConversationStorage(
         BotSharpDatabaseSettings dbSettings,
-        AgentSettings agentSettings,
-        IServiceProvider services,
-        IUserIdentity user)
+        IServiceProvider services)
     {
         _dbSettings = dbSettings;
-        _agentSettings = agentSettings;
         _services = services;
-        _user = user;
+        _options = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            AllowTrailingCommas = true,
+            Converters =
+            {
+                new RichContentJsonConverter(),
+                new TemplateMessageJsonConverter(),
+            }
+        };
     }
 
     public void Append(string conversationId, RoleDialogModel dialog)
     {
         var agentId = dialog.CurrentAgentId;
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var dialogText = db.GetConversationDialog(conversationId);
-        var sb = new StringBuilder(dialogText);
+        var dialogElements = new List<DialogElement>();
 
         if (dialog.Role == AgentRole.Function)
         {
-            var args = dialog.FunctionArgs.Replace("\r", " ").Replace("\n", " ").Trim();
-
-            sb.AppendLine($"{dialog.CreatedAt}|{dialog.Role}|{agentId}|{dialog.FunctionName}|{args}");
-
-            var content = dialog.ExecutionResult ?? dialog.Content;
-            content = content.Replace("\r", " ").Replace("\n", " ").Trim();
+            var meta = new DialogMetaData
+            {
+                Role = dialog.Role,
+                AgentId = agentId,
+                MessageId = dialog.MessageId,
+                FunctionName = dialog.FunctionName,
+                CreateTime = dialog.CreatedAt
+            }; 
+            
+            var content = dialog.Content.RemoveNewLine();
             if (string.IsNullOrEmpty(content))
             {
                 return;
             }
-            sb.AppendLine($"  - {content}");
+            dialogElements.Add(new DialogElement(meta, content));
         }
         else
         {
-            var routingSetting = _services.GetRequiredService<RoutingSettings>();
-            var agentName = routingSetting.RouterId == agentId ? "Router" : db.Agents.First(x => x.Id == agentId).Name;
-
-            sb.AppendLine($"{dialog.CreatedAt}|{dialog.Role}|{agentId}|{agentName}|");
-            var content = dialog.Content.Replace("\r", " ").Replace("\n", " ").Trim();
+            var meta = new DialogMetaData
+            {
+                Role = dialog.Role,
+                AgentId = agentId,
+                MessageId = dialog.MessageId,
+                SenderId = dialog.SenderId,
+                CreateTime = dialog.CreatedAt
+            };
+            
+            var content = dialog.Content.RemoveNewLine();
             if (string.IsNullOrEmpty(content))
             {
                 return;
             }
-            sb.AppendLine($"  - {content}");
+            var richContent = dialog.RichContent != null ? JsonSerializer.Serialize(dialog.RichContent, _options) : null;
+            dialogElements.Add(new DialogElement(meta, content, richContent));
         }
 
-        var updatedDialogs = sb.ToString();
-        db.UpdateConversationDialog(conversationId, updatedDialogs);
+        db.AppendConversationDialogs(conversationId, dialogElements);
     }
 
     public List<RoleDialogModel> GetDialogs(string conversationId)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var dialogText = db.GetConversationDialog(conversationId);
-        var dialogs = dialogText.SplitByNewLine();
+        var dialogs = db.GetConversationDialogs(conversationId);
+        var hooks = _services.GetServices<IConversationHook>();
 
         var results = new List<RoleDialogModel>();
-        for (int i = 0; i < dialogs.Length; i += 2)
+        foreach (var dialog in dialogs)
         {
-            var meta = dialogs[i];
-            var dialog = dialogs[i + 1];
-            var createdAt = DateTime.Parse(meta.Split('|')[0]);
-            var role = meta.Split('|')[1];
-            var currentAgentId = meta.Split('|')[2];
-            var funcName = meta.Split('|')[3];
-            var funcArgs= meta.Split('|')[4];
-            var text = dialog.Substring(4);
+            var meta = dialog.MetaData;
+            var content = dialog.Content;
+            var role = meta.Role;
+            var currentAgentId = meta.AgentId;
+            var messageId = meta.MessageId;
+            var function = role == AgentRole.Function ? meta.FunctionName : null;
+            var senderId = role == AgentRole.Function ? currentAgentId : meta.SenderId;
+            var createdAt = meta.CreateTime;
+            var richContent = !string.IsNullOrEmpty(dialog.RichContent) ? 
+                                JsonSerializer.Deserialize<RichContent<IRichMessage>>(dialog.RichContent, _options) : null;
 
-            results.Add(new RoleDialogModel(role, text)
+            var record = new RoleDialogModel(role, content)
             {
                 CurrentAgentId = currentAgentId,
-                FunctionName = funcName,
-                FunctionArgs = funcArgs,
-                ExecutionResult = text,
-                CreatedAt = createdAt
-            });
+                MessageId = messageId,
+                CreatedAt = createdAt,
+                SenderId = senderId,
+                FunctionName = function,
+                RichContent = richContent
+            };
+            results.Add(record);
+
+            foreach(var hook in hooks)
+            {
+                hook.OnDialogRecordLoaded(record).Wait();
+            }
         }
+
+        foreach (var hook in hooks)
+        {
+            hook.OnDialogsLoaded(results).Wait();
+        }
+
         return results;
     }
 

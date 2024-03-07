@@ -1,7 +1,7 @@
 using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Models;
 using BotSharp.Abstraction.Routing;
 using BotSharp.Abstraction.Routing.Settings;
+using BotSharp.Core.Routing.Planning;
 
 namespace BotSharp.Core.Routing.Handlers;
 
@@ -11,36 +11,31 @@ public class TaskEndRoutingHandler : RoutingHandlerBase, IRoutingHandler
 
     public string Description => "Call this function when current task is completed.";
 
-    public List<NameDesc> Parameters => new List<NameDesc>
+    public List<ParameterPropertyDef> Parameters => new List<ParameterPropertyDef>
     {
-        new NameDesc("abandoned_arguments", "the arguments next task can't reuse")
+        new ParameterPropertyDef("abandoned_arguments", "the arguments next task can't reuse")
     };
 
-    public bool IsReasoning => true;
+    public List<string> Planers => new List<string>
+    {
+        nameof(HFPlanner)
+    };
 
     public TaskEndRoutingHandler(IServiceProvider services, ILogger<TaskEndRoutingHandler> logger, RoutingSettings settings) 
         : base(services, logger, settings)
     {
     }
 
-    public async Task<RoleDialogModel> Handle(IRoutingService routing, FunctionCallFromLlm inst)
+    public async Task<bool> Handle(IRoutingService routing, FunctionCallFromLlm inst, RoleDialogModel message)
     {
-        var result = new RoleDialogModel(AgentRole.Assistant, inst.Response)
-        {
-            CurrentAgentId = _settings.RouterId,
-            FunctionName = inst.Function,
-            ExecutionData = inst
-        };
-
         var hooks = _services.GetServices<IConversationHook>()
             .OrderBy(x => x.Priority)
             .ToList();
 
-        foreach (var hook in hooks)
-        {
-            await hook.CurrentTaskEnding(result);
-        }
+        Task.WaitAll(hooks
+            .Select(h => h.OnCurrentTaskEnding(message))
+            .ToArray());
 
-        return result;
+        return true;
     }
 }

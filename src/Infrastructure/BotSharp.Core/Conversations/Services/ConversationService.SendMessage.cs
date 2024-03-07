@@ -1,5 +1,6 @@
 using BotSharp.Abstraction.Agents.Models;
-using BotSharp.Abstraction.Routing;
+using BotSharp.Abstraction.Messaging;
+using BotSharp.Abstraction.Messaging.Models.RichContent;
 using BotSharp.Abstraction.Routing.Settings;
 using System.Drawing;
 
@@ -7,8 +8,8 @@ namespace BotSharp.Core.Conversations.Services;
 
 public partial class ConversationService
 {
-    public async Task<bool> SendMessage(string agentId, 
-        RoleDialogModel incoming,
+    public async Task<bool> SendMessage(string agentId,
+        RoleDialogModel message,
         Func<RoleDialogModel, Task> onMessageReceived,
         Func<RoleDialogModel, Task> onFunctionExecuting,
         Func<RoleDialogModel, Task> onFunctionExecuted)
@@ -18,13 +19,31 @@ public partial class ConversationService
         var agentService = _services.GetRequiredService<IAgentService>();
         Agent agent = await agentService.LoadAgent(agentId);
 
-        _logger.LogInformation($"[{agent.Name}] {incoming.Role}: {incoming.Content}");
+        var content = $"Received [{agent.Name}] {message.Role}: {message.Content}";
+#if DEBUG
+        Console.WriteLine(content, Color.GreenYellow);
+#else
+        _logger.LogInformation(content);
+#endif
 
-        incoming.CurrentAgentId = agent.Id;
+        message.CurrentAgentId = agent.Id;
+        if (string.IsNullOrEmpty(message.SenderId))
+        {
+            message.SenderId = _user.Id;
+        }
 
-        _storage.Append(_conversationId, incoming);
+        _storage.Append(_conversationId, message);
 
+        var statistics = _services.GetRequiredService<ITokenStatistics>();
         var hooks = _services.GetServices<IConversationHook>().ToList();
+
+        RoleDialogModel response = message;
+        bool stopCompletion = false;
+
+        // Enqueue receiving agent first in case it stop completion by OnMessageReceived
+        var routing = _services.GetRequiredService<IRoutingService>();
+        routing.Context.SetMessageId(_conversationId, message.MessageId);
+        routing.Context.Push(agent.Id);
 
         // Before chat completion hook
         foreach (var hook in hooks)
@@ -32,28 +51,30 @@ public partial class ConversationService
             hook.SetAgent(agent)
                 .SetConversation(conversation);
 
-            await hook.OnMessageReceived(incoming);
+            await hook.OnMessageReceived(message);
 
             // Interrupted by hook
-            if (incoming.StopCompletion)
+            if (message.StopCompletion)
             {
-                await onMessageReceived(incoming);
-                _storage.Append(_conversationId, incoming);
-                return true;
+                stopCompletion = true;
+                routing.Context.Pop();
+                break;
             }
         }
 
-        // Routing with reasoning
-        var routing = _services.GetRequiredService<IRoutingService>();
-        var settings = _services.GetRequiredService<RoutingSettings>();
+        if (!stopCompletion)
+        {
+            // Routing with reasoning
+            var settings = _services.GetRequiredService<RoutingSettings>();
 
-        var response = agentId == settings.RouterId ?
-            await routing.InstructLoop() :
-            await routing.ExecuteOnce(agent);
+            response = agent.Type == AgentType.Routing ?
+                await routing.InstructLoop(message) :
+                await routing.InstructDirect(agent, message);
+
+            routing.ResetRecursiveCounter();
+        }
 
         await HandleAssistantMessage(response, onMessageReceived);
-
-        var statistics = _services.GetRequiredService<ITokenStatistics>();
         statistics.PrintStatistics();
 
         return true;
@@ -63,12 +84,15 @@ public partial class ConversationService
     {
         var converation = await GetConversation(_conversationId);
 
-        // Create conversation if this conversation not exists
+        // Create conversation if this conversation does not exist
         if (converation == null)
         {
+            var state = _services.GetRequiredService<IConversationStateService>();
+            var channel = state.GetState("channel");
             var sess = new Conversation
             {
                 Id = _conversationId,
+                Channel = channel,
                 AgentId = agentId
             };
             converation = await NewConversation(sess);
@@ -77,31 +101,52 @@ public partial class ConversationService
         return converation;
     }
 
-    private async Task HandleAssistantMessage(RoleDialogModel message, Func<RoleDialogModel, Task> onMessageReceived)
+    private async Task HandleAssistantMessage(RoleDialogModel response, Func<RoleDialogModel, Task> onResponseReceived)
     {
-        var routingSetting = _services.GetRequiredService<RoutingSettings>();
-        var agentName = routingSetting.RouterId == message.CurrentAgentId ? 
-            "Router" : 
-            (await _services.GetRequiredService<IAgentService>().GetAgent(message.CurrentAgentId)).Name;
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var agent = await agentService.GetAgent(response.CurrentAgentId);
+        var agentName = agent.Name;
 
-        var text = message.Role == AgentRole.Function ?
-            $"[{agentName}] {message.FunctionName}: {message.Content}" :
-            $"[{agentName}] {message.Role}: {message.Content}";
+        // Send message always in assistant role
+        response.Role = AgentRole.Assistant;
+        var text = $"Sending [{agentName}] {response.Role}: {response.Content}";
 #if DEBUG
-        Console.WriteLine(text, Color.Pink);
+        Console.WriteLine(text, Color.Yellow);
 #else
         _logger.LogInformation(text);
 #endif
 
+        // Process rich content
+        if (response.RichContent != null &&
+            response.RichContent is RichContent<IRichMessage> template &&
+            string.IsNullOrEmpty(template.Message.Text))
+        {
+            template.Message.Text = response.Content;
+        }
+
+        // Only read content from RichContent for UI rendering. When richContent is null, create a basic text message for richContent.
+        var state = _services.GetRequiredService<IConversationStateService>();
+        response.RichContent = response.RichContent ?? new RichContent<IRichMessage>
+        {
+            Recipient = new Recipient { Id = state.GetConversationId() },
+            Message = new TextMessage(response.Content)
+        };
+
         var hooks = _services.GetServices<IConversationHook>().ToList();
         foreach (var hook in hooks)
         {
-            await hook.OnResponseGenerated(message);
+            await hook.OnResponseGenerated(response);
         }
 
-        await onMessageReceived(message);
+        await onResponseReceived(response);
 
         // Add to dialog history
-        _storage.Append(_conversationId, message);
+        _storage.Append(_conversationId, response);
+
+        if (response.Instruction != null)
+        {
+            var conversation = _services.GetRequiredService<IConversationService>();
+            var updatedConversation = await conversation.UpdateConversationTitle(_conversationId, response.Instruction.Reason);
+        }
     }
 }

@@ -6,6 +6,9 @@
 The Open Source LLM Application Framework
 ======================================================
 
+.. image:: static/logos/Logo.png
+   :height: 128px
+
 .. image:: https://img.shields.io/discord/1106946823282761851?label=Discord
     :target: `discord`_
 
@@ -21,8 +24,6 @@ It's witten in C# running on .NET which is a full cross-platform framework. C# i
 
 BotSharp is strictly in accordance with the components principle and decouples every part that is needed in the platform builder. So you can choose different UI/UX, or pick up a different Vector Storage, or select a more advanced algorithm to do NLU tasks. They are all modularized based on unified interfaces.
 
-.. image:: static/logos/BotSharp.png
-   :height: 64px
 
 Indices and tables
 ==================
@@ -51,6 +52,7 @@ The main documentation for the site is organized into the following sections:
 
    agent/intro
    agent/router
+   agent/hook
 
 .. toctree::
    :maxdepth: 2
@@ -58,6 +60,7 @@ The main documentation for the site is organized into the following sections:
 
    conversation/intro
    conversation/state
+   conversation/hook
 
 .. _integration-docs:
 
@@ -66,6 +69,7 @@ The main documentation for the site is organized into the following sections:
    :caption: Interactive Channels
 
    channels/intro
+   channels/components
    channels/messenger
    channels/wechat
 
@@ -90,17 +94,19 @@ The main documentation for the site is organized into the following sections:
    llm/template
    llm/function
    llm/few-shot-learning
+   llm/provider
 
 .. _architecture-docs:
 
 .. toctree::
    :maxdepth: 2
-   :caption: Architecture:
+   :caption: Architecture
    
    architecture/authentication
    architecture/plugin
    architecture/hooks
    architecture/routing
+   architecture/logging
    architecture/data-persistence
 
 If you feel that this project is helpful to you, please Star us on the project, we will be very grateful.

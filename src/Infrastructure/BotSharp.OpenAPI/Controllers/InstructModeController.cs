@@ -1,7 +1,4 @@
-using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Agents.Models;
-using BotSharp.Abstraction.ApiAdapters;
-using BotSharp.Abstraction.Conversations.Models;
 using BotSharp.Abstraction.Instructs;
 using BotSharp.Abstraction.Instructs.Models;
 using BotSharp.Core.Infrastructures;
@@ -11,7 +8,7 @@ namespace BotSharp.OpenAPI.Controllers;
 
 [Authorize]
 [ApiController]
-public class InstructModeController : ControllerBase, IApiAdapter
+public class InstructModeController : ControllerBase
 {
     private readonly IServiceProvider _services;
 
@@ -24,31 +21,52 @@ public class InstructModeController : ControllerBase, IApiAdapter
     public async Task<InstructResult> InstructCompletion([FromRoute] string agentId,
         [FromBody] InstructMessageModel input)
     {
+        var state = _services.GetRequiredService<IConversationStateService>();
+        input.States.ForEach(x => state.SetState(x.Split('=')[0], x.Split('=')[1]));
+        state.SetState("provider", input.Provider)
+            .SetState("model", input.Model)
+            .SetState("instruction", input.Instruction)
+            .SetState("input_text", input.Text);
+
         var instructor = _services.GetRequiredService<IInstructService>();
-        var agentService = _services.GetRequiredService<IAgentService>();
-        Agent agent = await agentService.LoadAgent(agentId);
-
-        // switch to different instruction template
-        if (!string.IsNullOrEmpty(input.Template))
-        {
-            agent.Instruction = agent.Templates.First(x => x.Name == input.Template).Content;
-        }
-
-        var conv = _services.GetRequiredService<IConversationService>();
-        conv.States.SetState("provider", input.Provider)
-            .SetState("model", input.Model);
-
-        return await instructor.ExecuteInstruction(agent,
+        var result = await instructor.Execute(agentId,
             new RoleDialogModel(AgentRole.User, input.Text),
-            fn => Task.CompletedTask,
-            fn => Task.CompletedTask,
-            fn => Task.CompletedTask);
+            templateName: input.Template,
+            instruction: input.Instruction);
+
+        result.States = state.GetStates();
+
+        return result; 
     }
 
     [HttpPost("/instruct/text-completion")]
-    public async Task<string> TextCompletion([FromBody] IncomingMessageModel message)
+    public async Task<string> TextCompletion([FromBody] IncomingMessageModel input)
     {
+        var state = _services.GetRequiredService<IConversationStateService>();
+        input.States.ForEach(x => state.SetState(x.Split('=')[0], x.Split('=')[1]));
+        state.SetState("provider", input.Provider)
+            .SetState("model", input.Model);
+
         var textCompletion = CompletionProvider.GetTextCompletion(_services);
-        return await textCompletion.GetCompletion(message.Text);
+        return await textCompletion.GetCompletion(input.Text, Guid.Empty.ToString(), Guid.NewGuid().ToString());
+    }
+
+    [HttpPost("/instruct/chat-completion")]
+    public async Task<string> ChatCompletion([FromBody] IncomingMessageModel input)
+    {
+        var state = _services.GetRequiredService<IConversationStateService>();
+        input.States.ForEach(x => state.SetState(x.Split('=')[0], x.Split('=')[1]));
+        state.SetState("provider", input.Provider)
+            .SetState("model", input.Model);
+
+        var textCompletion = CompletionProvider.GetChatCompletion(_services);
+        var message = await textCompletion.GetChatCompletions(new Agent()
+        {
+            Id = Guid.Empty.ToString(),
+        }, new List<RoleDialogModel>
+        {
+            new RoleDialogModel(AgentRole.User, input.Text)
+        });
+        return message.Content;
     }
 }

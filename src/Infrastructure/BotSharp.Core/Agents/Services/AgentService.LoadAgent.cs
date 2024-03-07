@@ -5,16 +5,24 @@ namespace BotSharp.Core.Agents.Services;
 
 public partial class AgentService
 {
-#if !DEBUG
-    [MemoryCache(10 * 60)]
-#endif
+    [MemoryCache(10 * 60, perInstanceCache: true)]
     public async Task<Agent> LoadAgent(string id)
     {
+        if (string.IsNullOrEmpty(id) || id == Guid.Empty.ToString())
+        {
+            return null;
+        }
+
         var hooks = _services.GetServices<IAgentHook>();
 
         // Before agent is loaded.
         foreach (var hook in hooks)
         {
+            if (!string.IsNullOrEmpty(hook.SelfId) && hook.SelfId != id)
+            {
+                continue;
+            }
+
             hook.OnAgentLoading(ref id);
         }
 
@@ -24,17 +32,45 @@ public partial class AgentService
             throw new Exception($"Can't load agent by id: {id}");
         }
 
-        var templateDict = new Dictionary<string, object>();
-        PopulateState(templateDict);
+        if (agent.InheritAgentId != null)
+        {
+            var inheritedAgent = await GetAgent(agent.InheritAgentId);
+            agent.Templates.AddRange(inheritedAgent.Templates
+                // exclude private template
+                .Where(x => !x.Name.StartsWith("."))
+                // exclude duplicate name
+                .Where(x => !agent.Templates.Exists(t => t.Name == x.Name)));
+
+            agent.Functions.AddRange(inheritedAgent.Functions
+                // exclude private template
+                .Where(x => !x.Name.StartsWith("."))
+                // exclude duplicate name
+                .Where(x => !agent.Functions.Exists(t => t.Name == x.Name)));
+
+            if (agent.Instruction == null)
+            {
+                agent.Instruction = inheritedAgent.Instruction;
+            }
+        }
+
+        agent.TemplateDict = new Dictionary<string, object>();
+
+        // Populate state into dictionary
+        PopulateState(agent.TemplateDict);
 
         // After agent is loaded
         foreach (var hook in hooks)
         {
+            if (!string.IsNullOrEmpty(hook.SelfId) && hook.SelfId != id)
+            {
+                continue;
+            }
+
             hook.SetAget(agent);
 
             if (!string.IsNullOrEmpty(agent.Instruction))
             {
-                hook.OnInstructionLoaded(agent.Instruction, templateDict);
+                hook.OnInstructionLoaded(agent.Instruction, agent.TemplateDict);
             }
 
             if (agent.Functions != null)
@@ -42,22 +78,31 @@ public partial class AgentService
                 hook.OnFunctionsLoaded(agent.Functions);
             }
 
-            if (!string.IsNullOrEmpty(agent.Samples))
+            if (agent.Samples != null)
             {
-                var samples = agent.Samples;
-                hook.OnSamplesLoaded(ref samples);
+                hook.OnSamplesLoaded(agent.Samples);
             }
 
             hook.OnAgentLoaded(agent);
         }
 
-        // render liquid template
-        var render = _services.GetRequiredService<ITemplateRender>();
-        agent.Instruction = render.Render(agent.Instruction, templateDict);
-
         _logger.LogInformation($"Loaded agent {agent}.");
 
         return agent;
+    }
+
+    public string RenderedTemplate(Agent agent, string templateName)
+    {
+        // render liquid template
+        var render = _services.GetRequiredService<ITemplateRender>();
+        var template = agent.Templates.First(x => x.Name == templateName).Content;
+        return render.Render(template, agent.TemplateDict);
+    }
+
+    public string RenderedInstruction(Agent agent)
+    {
+        var render = _services.GetRequiredService<ITemplateRender>();
+        return render.Render(agent.Instruction, agent.TemplateDict);
     }
 
     private void PopulateState(Dictionary<string, object> dict)

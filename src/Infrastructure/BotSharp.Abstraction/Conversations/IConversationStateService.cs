@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace BotSharp.Abstraction.Conversations;
 
 /// <summary>
@@ -5,11 +7,13 @@ namespace BotSharp.Abstraction.Conversations;
 /// </summary>
 public interface IConversationStateService
 {
-    ConversationState Load(string conversationId);
+    string GetConversationId();
+    Dictionary<string, string> Load(string conversationId);
     string GetState(string name, string defaultValue = "");
     bool ContainsState(string name);
-    ConversationState GetStates();
-    IConversationStateService SetState<T>(string name, T value);
+    Dictionary<string, string> GetStates();
+    IConversationStateService SetState<T>(string name, T value, bool isNeedVersion = true);
+    void SaveStateByArgs(JsonDocument args);
     void CleanState();
     void Save();
 }

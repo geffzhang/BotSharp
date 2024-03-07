@@ -4,6 +4,7 @@ namespace BotSharp.Abstraction.Instructs;
 
 public interface IInstructHook
 {
-    Task BeforeCompletion(RoleDialogModel message);
-    Task AfterCompletion(InstructResult result);
+    string SelfId { get; }
+    Task BeforeCompletion(Agent agent, RoleDialogModel message);
+    Task AfterCompletion(Agent agent, InstructResult result);
 }

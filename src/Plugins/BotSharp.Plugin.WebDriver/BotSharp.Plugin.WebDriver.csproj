@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>$(LangVersion)</LangVersion>
+    <VersionPrefix>$(BotSharpVersion)</VersionPrefix>
+    <GeneratePackageOnBuild>$(GeneratePackageOnBuild)</GeneratePackageOnBuild>
+    <GenerateDocumentationFile>$(GenerateDocumentationFile)</GenerateDocumentationFile>
+    <OutputPath>$(SolutionDir)packages</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" Version="1.41.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\agent.json" />
+    <None Remove="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\functions.json" />
+    <None Remove="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\instruction.liquid" />
+    <None Remove="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\templates\extract_data.liquid" />
+    <None Remove="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\templates\html_parser.liquid" />
+    <None Remove="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\agent.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\functions.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\instruction.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\templates\extract_data.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\f3ae2a0f-e6ba-4ee1-a0b9-75d7431ff32b\templates\html_parser.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\BotSharp.Core\BotSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

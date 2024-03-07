@@ -1,3 +1,5 @@
+using BotSharp.Abstraction.Loggers;
+
 namespace BotSharp.Plugin.LLamaSharp.Providers;
 
 public class TextCompletionProvider : ITextCompletion
@@ -20,13 +22,21 @@ public class TextCompletionProvider : ITextCompletion
         _tokenStatistics = tokenStatistics;
     }
 
-    public async Task<string> GetCompletion(string text)
+    public async Task<string> GetCompletion(string text, string agentId, string messageId)
     {
         var hooks = _services.GetServices<IContentGeneratingHook>().ToList();
 
         // Before chat completion hook
+        var agent = new Agent()
+        {
+            Id = agentId
+        };
+        var userMessage = new RoleDialogModel(AgentRole.User, text)
+        {
+            MessageId = messageId
+        };
         Task.WaitAll(hooks.Select(hook =>
-            hook.BeforeGenerating(new Agent(), new List<RoleDialogModel> { new RoleDialogModel(AgentRole.User, text) })).ToArray());
+            hook.BeforeGenerating(agent, new List<RoleDialogModel> { userMessage })).ToArray());
 
         var llama = _services.GetRequiredService<LlamaAiModel>();
         llama.LoadModel(_model);
@@ -36,7 +46,7 @@ public class TextCompletionProvider : ITextCompletion
 
         _tokenStatistics.StartTimer();
         string completion = "";
-        foreach (var response in executor.Infer(text, inferenceParams))
+        await foreach (var response in executor.InferAsync(text, inferenceParams))
         {
             Console.Write(response);
             completion += response;
@@ -44,8 +54,13 @@ public class TextCompletionProvider : ITextCompletion
         _tokenStatistics.StopTimer();
 
         // After chat completion hook
+        var responseMessage = new RoleDialogModel(AgentRole.Assistant, completion)
+        {
+            CurrentAgentId = agentId,
+            MessageId = messageId
+        };
         Task.WaitAll(hooks.Select(hook =>
-            hook.AfterGenerated(new RoleDialogModel(AgentRole.Assistant, completion), new TokenStatsModel
+            hook.AfterGenerated(responseMessage, new TokenStatsModel
             {
                 Model = _model
             })).ToArray());

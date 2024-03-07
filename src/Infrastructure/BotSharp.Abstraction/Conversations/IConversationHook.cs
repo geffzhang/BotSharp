@@ -1,3 +1,5 @@
+using BotSharp.Abstraction.Functions.Models;
+
 namespace BotSharp.Abstraction.Conversations;
 
 public interface IConversationHook
@@ -9,6 +11,14 @@ public interface IConversationHook
 
     Conversation Conversation { get; }
     IConversationHook SetConversation(Conversation conversation);
+
+    /// <summary>
+    /// Triggered when user connects with agent first time.
+    /// This hook is the good timing to show welcome infomation.
+    /// </summary>
+    /// <param name="conversation"></param>
+    /// <returns></returns>
+    Task OnUserAgentConnectedInitially(Conversation conversation);
 
     /// <summary>
     /// Triggered once for every new conversation.
@@ -23,6 +33,14 @@ public interface IConversationHook
     /// <param name="dialogs"></param>
     /// <returns></returns>
     Task OnDialogsLoaded(List<RoleDialogModel> dialogs);
+
+    /// <summary>
+    /// Triggered when every dialog record is loaded
+    /// It can be used to populate extra data point before presenting to user.
+    /// </summary>
+    /// <param name="dialog"></param>
+    /// <returns></returns>
+    Task OnDialogRecordLoaded(RoleDialogModel dialog);
 
     Task OnStateLoaded(ConversationState state);
     Task OnStateChanged(string name, string preValue, string currentValue);
@@ -51,19 +69,19 @@ public interface IConversationHook
     /// </summary>
     /// <param name="conversation"></param>
     /// <returns></returns>
-    Task CurrentTaskEnding(RoleDialogModel conversation);
+    Task OnCurrentTaskEnding(RoleDialogModel message);
 
     /// <summary>
     /// LLM detected the whole conversation is going to be end.
     /// </summary>
     /// <param name="conversation"></param>
     /// <returns></returns>
-    Task ConversationEnding(RoleDialogModel conversation);
+    Task OnConversationEnding(RoleDialogModel message);
 
     /// <summary>
     /// LLM can't handle user's request or user requests human being to involve.
     /// </summary>
     /// <param name="conversation"></param>
     /// <returns></returns>
-    Task HumanInterventionNeeded(RoleDialogModel conversation);
+    Task OnHumanInterventionNeeded(RoleDialogModel message);
 }

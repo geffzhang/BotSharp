@@ -1,4 +1,6 @@
 using BotSharp.Abstraction.Agents.Models;
+using BotSharp.Abstraction.Repositories.Filters;
+using BotSharp.Abstraction.Routing.Settings;
 
 namespace BotSharp.Core.Agents.Services;
 
@@ -7,14 +9,23 @@ public partial class AgentService
 #if !DEBUG
     [MemoryCache(10 * 60)]
 #endif
-    public async Task<List<Agent>> GetAgents()
+    public async Task<PagedItems<Agent>> GetAgents(AgentFilter filter)
     {
-        var query = from a in _db.Agents
-                    join ua in _db.UserAgents on a.Id equals ua.AgentId
-                    join u in _db.Users on ua.UserId equals u.Id
-                    where ua.UserId == _user.Id || u.ExternalId == _user.Id || a.IsPublic
-                    select a;
-        return query.ToList();
+        var agents = _db.GetAgents(filter);
+
+        var routeSetting = _services.GetRequiredService<RoutingSettings>();
+        foreach (var agent in agents)
+        {
+            agent.Plugin = GetPlugin(agent.Id);
+        }
+
+        agents = agents.Where(x => x.Installed).ToList();
+        var pager = filter?.Pager ?? new Pagination();
+        return new PagedItems<Agent>
+        {
+            Items = agents.Skip(pager.Offset).Take(pager.Size),
+            Count = agents.Count()
+        };
     }
 
 #if !DEBUG
@@ -28,7 +39,17 @@ public partial class AgentService
         {
             _logger.LogError($"Can't find agent {id}");
             return null;
-        };
+        }
+
+        // Load llm config
+        var agentSetting = _services.GetRequiredService<AgentSettings>();
+        if (profile.LlmConfig == null)
+        {
+            profile.LlmConfig = agentSetting.LlmConfig;
+            profile.LlmConfig.IsInherit = true;
+        }
+
+        profile.Plugin = GetPlugin(profile.Id);
 
         return profile;
     }

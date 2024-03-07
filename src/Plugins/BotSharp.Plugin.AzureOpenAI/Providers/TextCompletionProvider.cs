@@ -3,7 +3,6 @@ using BotSharp.Abstraction.MLTasks;
 using System;
 using System.Threading.Tasks;
 using BotSharp.Plugin.AzureOpenAI.Settings;
-using Microsoft.Extensions.Logging;
 using BotSharp.Abstraction.Conversations;
 using Microsoft.Extensions.DependencyInjection;
 using BotSharp.Abstraction.Conversations.Models;
@@ -11,6 +10,7 @@ using BotSharp.Abstraction.Agents.Enums;
 using System.Linq;
 using System.Collections.Generic;
 using BotSharp.Abstraction.Agents.Models;
+using BotSharp.Abstraction.Loggers;
 
 namespace BotSharp.Plugin.AzureOpenAI.Providers;
 
@@ -18,28 +18,39 @@ public class TextCompletionProvider : ITextCompletion
 {
     private readonly IServiceProvider _services;
     private readonly AzureOpenAiSettings _settings;
-    private readonly ILogger _logger;
     private string _model;
     public string Provider => "azure-openai";
 
     public TextCompletionProvider(IServiceProvider services,
-        AzureOpenAiSettings settings, 
-        ILogger<TextCompletionProvider> logger)
+        AzureOpenAiSettings settings)
     {
         _services = services;
         _settings = settings;
-        _logger = logger;
     }
 
-    public async Task<string> GetCompletion(string text)
+    public async Task<string> GetCompletion(string text, string agentId, string messageId)
     {
-        var hooks = _services.GetServices<IContentGeneratingHook>().ToList();
+        var contentHooks = _services.GetServices<IContentGeneratingHook>().ToList();
 
         // Before chat completion hook
-        Task.WaitAll(hooks.Select(hook =>
-            hook.BeforeGenerating(new Agent(), new List<RoleDialogModel> { new RoleDialogModel(AgentRole.User, text) })).ToArray());
+        var agent = new Agent()
+        {
+            Id = agentId,
+        };
+        var message = new RoleDialogModel(AgentRole.User, text)
+        {
+            CurrentAgentId = agentId,
+            MessageId = messageId
+        };
 
-        var (client, _) = ProviderHelper.GetClient(_model, _settings);
+        Task.WaitAll(contentHooks.Select(hook =>
+            hook.BeforeGenerating(agent,
+                new List<RoleDialogModel>
+                {
+                    message
+                })).ToArray());
+
+        var client = ProviderHelper.GetClient(_model, _services);
 
         var completionsOptions = new CompletionsOptions()
         {
@@ -52,14 +63,12 @@ public class TextCompletionProvider : ITextCompletion
         completionsOptions.StopSequences.Add($"{AgentRole.Assistant}:");
 
         var state = _services.GetRequiredService<IConversationStateService>();
-        var temperature = float.Parse(state.GetState("temperature", "0.5"));
-        var samplingFactor = float.Parse(state.GetState("sampling_factor", "0.5"));
+        var temperature = float.Parse(state.GetState("temperature", "0.0"));
+        var samplingFactor = float.Parse(state.GetState("sampling_factor", "0.0"));
         completionsOptions.Temperature = temperature;
         completionsOptions.NucleusSamplingFactor = samplingFactor;
-
-        var response = await client.GetCompletionsAsync(
-            deploymentOrModelName: _settings.DeploymentModel.TextCompletionModel,
-            completionsOptions);
+        completionsOptions.DeploymentName = _model;
+        var response = await client.GetCompletionsAsync(completionsOptions);
 
         // OpenAI
         var completion = "";
@@ -69,9 +78,16 @@ public class TextCompletionProvider : ITextCompletion
         };
 
         // After chat completion hook
-        Task.WaitAll(hooks.Select(hook =>
-            hook.AfterGenerated(new RoleDialogModel(AgentRole.Assistant, completion), new TokenStatsModel
+        var responseMessage = new RoleDialogModel(AgentRole.Assistant, completion)
+        {
+            CurrentAgentId = agentId,
+            MessageId = messageId
+        };
+        Task.WaitAll(contentHooks.Select(hook =>
+            hook.AfterGenerated(responseMessage, new TokenStatsModel
             {
+                Prompt = text,
+                Provider = Provider,
                 Model = _model,
                 PromptCount = response.Value.Usage.PromptTokens,
                 CompletionCount = response.Value.Usage.CompletionTokens

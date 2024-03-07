@@ -1,7 +1,6 @@
 using BotSharp.Abstraction.Repositories;
 using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Abstraction.Templating;
-using System.IO;
 using System.Reflection;
 
 namespace BotSharp.Core.Templating;
@@ -36,14 +35,18 @@ public class ResponseTemplateService : IResponseTemplateService
         // Convert args and execute data to dictionary
         var dict = new Dictionary<string, object>();
 
+        // Populate states
+        var state = _services.GetRequiredService<IConversationStateService>();
+        state.GetStates().Select(x => dict[x.Key] = x.Value).ToList();
+
         if (message.FunctionArgs != null)
         {
             ExtractArgs(JsonSerializer.Deserialize<JsonDocument>(message.FunctionArgs), dict);
         }
 
-        if (message.ExecutionData != null)
+        if (message.Data != null)
         {
-            ExtractExecuteData(message.ExecutionData, dict);
+            ExtractExecuteData(message.Data, dict);
         }
             
         var text = render.Render(template, dict);
@@ -65,8 +68,8 @@ public class ResponseTemplateService : IResponseTemplateService
         //    .ToList();
 
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var context = _services.GetRequiredService<RoutingContext>();
-        var responses = db.GetAgentResponses(agentId, "intent", context.IntentName);
+        var routing = _services.GetRequiredService<IRoutingContext>();
+        var responses = db.GetAgentResponses(agentId, "intent", routing.IntentName);
 
         if (responses.Count == 0)
         {
@@ -86,9 +89,9 @@ public class ResponseTemplateService : IResponseTemplateService
             ExtractArgs(JsonSerializer.Deserialize<JsonDocument>(message.FunctionArgs), dict);
         }
 
-        if (message.ExecutionData != null)
+        if (message.Data != null)
         {
-            ExtractExecuteData(message.ExecutionData, dict);
+            ExtractExecuteData(message.Data, dict);
         }
 
         var text = render.Render(template, dict);

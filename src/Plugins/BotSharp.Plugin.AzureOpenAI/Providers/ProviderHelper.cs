@@ -1,38 +1,28 @@
 using Azure.AI.OpenAI;
 using Azure;
 using System;
-using BotSharp.Plugin.AzureOpenAI.Settings;
 using BotSharp.Abstraction.Conversations.Models;
 using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
+using BotSharp.Abstraction.MLTasks;
 
 namespace BotSharp.Plugin.AzureOpenAI.Providers;
 
 public class ProviderHelper
 {
-    public static (OpenAIClient, string) GetClient(string model, AzureOpenAiSettings settings)
+    public static OpenAIClient GetClient(string model, IServiceProvider services)
     {
-        if (model == "gpt-4")
-        {
-            var client = new OpenAIClient(new Uri(settings.GPT4.Endpoint), new AzureKeyCredential(settings.GPT4.ApiKey));
-            return (client, settings.GPT4.DeploymentModel);
-        }
-        else
-        {
-            var client = new OpenAIClient(new Uri(settings.Endpoint), new AzureKeyCredential(settings.ApiKey));
-            return (client, settings.DeploymentModel.ChatCompletionModel);
-        }
+        var settingsService = services.GetRequiredService<ILlmProviderService>();
+        var settings = settingsService.GetSetting("azure-openai", model);
+        var client = new OpenAIClient(new Uri(settings.Endpoint), new AzureKeyCredential(settings.ApiKey));
+        return client;
     }
 
-    public static List<RoleDialogModel> GetChatSamples(string sampleText)
+    public static List<RoleDialogModel> GetChatSamples(List<string> lines)
     {
         var samples = new List<RoleDialogModel>();
-        if (string.IsNullOrEmpty(sampleText))
-        {
-            return samples;
-        }
 
-        var lines = sampleText.Split('\n');
-        for (int i = 0; i < lines.Length; i++)
+        for (int i = 0; i < lines.Count; i++)
         {
             var line = lines[i];
             if (string.IsNullOrEmpty(line.Trim()))

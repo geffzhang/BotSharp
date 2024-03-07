@@ -1,12 +1,10 @@
-using BotSharp.Abstraction.Agents.Enums;
-using BotSharp.Abstraction.ApiAdapters;
-using BotSharp.OpenAPI.ViewModels.Agents;
+using BotSharp.Abstraction.Agents.Models;
 
 namespace BotSharp.OpenAPI.Controllers;
 
 [Authorize]
 [ApiController]
-public class AgentController : ControllerBase, IApiAdapter
+public class AgentController : ControllerBase
 {
     private readonly IAgentService _agentService;
     private readonly IServiceProvider _services;
@@ -17,18 +15,49 @@ public class AgentController : ControllerBase, IApiAdapter
         _services = services;
     }
 
+    [HttpGet("/agent/settings")]
+    public AgentSettings GetSettings()
+    {
+        var settings = _services.GetRequiredService<AgentSettings>();
+        return settings;
+    }
+
     [HttpGet("/agent/{id}")]
     public async Task<AgentViewModel> GetAgent([FromRoute] string id)
     {
-        var agent = await _agentService.GetAgent(id);
-        return AgentViewModel.FromAgent(agent);
+        var agents = await GetAgents(new AgentFilter
+        {
+            AgentIds = new List<string> { id }
+        });
+        return agents.Items.FirstOrDefault();
     }
-
+             
     [HttpGet("/agents")]
-    public async Task<List<AgentViewModel>> GetAgents()
+    public async Task<PagedItems<AgentViewModel>> GetAgents([FromQuery] AgentFilter filter)
     {
-        var agents = await _agentService.GetAgents();
-         return agents.Select(x => AgentViewModel.FromAgent(x)).ToList();
+        var agentSetting = _services.GetRequiredService<AgentSettings>();
+        var pagedAgents = await _agentService.GetAgents(filter);
+
+        // prerender agent
+        var items = new List<Agent>();
+        foreach (var agent in pagedAgents.Items)
+        {
+            var renderedAgent = await _agentService.LoadAgent(agent.Id);
+            items.Add(renderedAgent);
+        }
+
+        // Set IsHost
+        var agents = items.Select(x => AgentViewModel.FromAgent(x)).ToList();
+        foreach(var agent in agents)
+        {
+            agent.IsHost = agentSetting.HostAgentId == agent.Id;
+        }
+
+        return new PagedItems<AgentViewModel>
+        {
+            Items = agents,
+            Count = pagedAgents.Count
+        };
     }
 
     [HttpPost("/agent")]
@@ -38,13 +67,19 @@ public class AgentController : ControllerBase, IApiAdapter
         return AgentViewModel.FromAgent(createdAgent);
     }
 
+    [HttpPost("/refresh-agents")]
+    public async Task RefreshAgents()
+    {
+        await _agentService.RefreshAgents();
+    }
+
     [HttpPut("/agent/file/{agentId}")]
     public async Task UpdateAgentFromFile([FromRoute] string agentId)
     {
         await _agentService.UpdateAgentFromFile(agentId);
     }
 
-    [HttpPut("/agent/{agentId}/all")]
+    [HttpPut("/agent/{agentId}")]
     public async Task UpdateAgent([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
     {
         var model = agent.ToAgent();
@@ -52,91 +87,11 @@ public class AgentController : ControllerBase, IApiAdapter
         await _agentService.UpdateAgent(model, AgentField.All);
     }
 
-    [HttpPut("/agent/{agentId}/name")]
-    public async Task UpdateAgentName([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
+    [HttpPatch("/agent/{agentId}/{field}")]
+    public async Task PatchAgentByField([FromRoute] string agentId, AgentField field, [FromBody] AgentUpdateModel agent)
     {
         var model = agent.ToAgent();
         model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Name);
-    }
-
-    [HttpPut("/agent/{agentId}/description")]
-    public async Task UpdateAgentDescription([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Description);
-    }
-
-    [HttpPut("/agent/{agentId}/is-public")]
-    public async Task UpdateAgentIsPublic([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.IsPublic);
-    }
-
-    [HttpPut("/agent/{agentId}/disabled")]
-    public async Task UpdateAgentDisabled([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Disabled);
-    }
-
-    [HttpPut("/agent/{agentId}/allow-routing")]
-    public async Task UpdateAgentAllowRouting([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.AllowRouting);
-    }
-
-    [HttpPut("/agent/{agentId}/profiles")]
-    public async Task UpdateAgentProfiles([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Profiles);
-    }
-
-    [HttpPut("/agent/{agentId}/routing-rules")]
-    public async Task UpdateAgentRoutingRules([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.RoutingRules);
-    }
-
-    [HttpPut("/agent/{agentId}/instruction")]
-    public async Task UpdateAgentInstruction([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Instruction);
-    }
-
-    [HttpPut("/agent/{agentId}/functions")]
-    public async Task UpdateAgentFunctions([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Function);
-    }
-
-    [HttpPut("/agent/{agentId}/templates")]
-    public async Task UpdateAgentTemplates([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Template);
-    }
-
-    [HttpPut("/agent/{agentId}/responses")]
-    public async Task UpdateAgentResponses([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
-    {
-        var model = agent.ToAgent();
-        model.Id = agentId;
-        await _agentService.UpdateAgent(model, AgentField.Response);
+        await _agentService.UpdateAgent(model, field);
     }
 }

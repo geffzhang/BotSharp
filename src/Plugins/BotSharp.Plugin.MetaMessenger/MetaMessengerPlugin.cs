@@ -1,13 +1,4 @@
-using BotSharp.Abstraction.Plugins;
-using BotSharp.Plugin.MetaMessenger.GraphAPIs;
-using BotSharp.Plugin.MetaMessenger.Settings;
-using BotSharp.Abstraction.Utilities;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Refit;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace BotSharp.Plugin.MetaMessenger;
 
@@ -16,6 +7,11 @@ namespace BotSharp.Plugin.MetaMessenger;
 /// </summary>
 public class MetaMessengerPlugin : IBotSharpPlugin
 {
+    public string Id => "3694d49c-ddc4-43ea-b019-4d3b373ad570";
+    public string Name => "Meta Messenger";
+    public string Description => "Messaging service that allows users to connect with others and share content.";
+    public string IconUrl => "https://static.xx.fbcdn.net/rsrc.php/yJ/r/C1E_YZIckM5.svg";
+
     public void RegisterDI(IServiceCollection services, IConfiguration config)
     {
         var settings = new MetaMessengerSetting();
@@ -33,6 +29,8 @@ public class MetaMessengerPlugin : IBotSharpPlugin
                     var setting = sp.GetRequiredService<MetaMessengerSetting>();
                     c.BaseAddress = new Uri($"{setting.Endpoint}");
                 });
-            //.AddHttpMessageHandler<AuthHeaderHandler>();
+        //.AddHttpMessageHandler<AuthHeaderHandler>();
+
+        services.AddScoped<MessageHandleService>();
     }
 }

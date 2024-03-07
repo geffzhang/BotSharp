@@ -12,45 +12,44 @@ public partial class AgentService
     {
         if (agent == null || string.IsNullOrEmpty(agent.Id)) return;
 
-        var record = FindAgent(agent.Id);
+        var record = _db.GetAgent(agent.Id);
         if (record == null) return;
 
         record.Name = agent.Name ?? string.Empty;
         record.Description = agent.Description ?? string.Empty;
         record.IsPublic = agent.IsPublic;
         record.Disabled = agent.Disabled;
-        record.AllowRouting = agent.AllowRouting;
+        record.Type = agent.Type;
         record.Profiles = agent.Profiles ?? new List<string>();
         record.RoutingRules = agent.RoutingRules ?? new List<RoutingRule>();
         record.Instruction = agent.Instruction ?? string.Empty;
         record.Functions = agent.Functions ?? new List<FunctionDef>();
         record.Templates = agent.Templates ?? new List<AgentTemplate>();
         record.Responses = agent.Responses ?? new List<AgentResponse>();
+        record.Samples = agent.Samples ?? new List<string>();
+        if (agent.LlmConfig != null && !agent.LlmConfig.IsInherit)
+        {
+            record.LlmConfig = agent.LlmConfig;
+        }
 
         _db.UpdateAgent(record, updateField);
-        await Task.CompletedTask;
-    }
 
-    private Agent FindAgent(string agentId)
-    {
-        var record = (from a in _db.Agents
-                      join ua in _db.UserAgents on a.Id equals ua.AgentId
-                      join u in _db.Users on ua.UserId equals u.Id
-                      where (ua.UserId == _user.Id || u.ExternalId == _user.Id) &&
-                        a.Id == agentId
-                      select a).FirstOrDefault();
-        return record;
+        Utilities.ClearCache();
+
+        await Task.CompletedTask;
     }
 
     public async Task UpdateAgentFromFile(string id)
     {
-        var agent = _db.Agents?.FirstOrDefault(x => x.Id == id);
+        var agent = _db.GetAgent(id);
 
         if (agent == null) return;
 
         var dbSettings = _services.GetRequiredService<BotSharpDatabaseSettings>();
         var agentSettings = _services.GetRequiredService<AgentSettings>();
-        var filePath = Path.Combine(dbSettings.FileRepository, agentSettings.DataDir);
+        var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                                    dbSettings.FileRepository,
+                                    agentSettings.DataDir);
 
         var clonedAgent = Agent.Clone(agent);
         var foundAgent = FetchAgentFileById(agent.Id, filePath);
@@ -61,15 +60,19 @@ public partial class AgentService
                        .SetDescription(foundAgent.Description)
                        .SetIsPublic(foundAgent.IsPublic)
                        .SetDisabled(foundAgent.Disabled)
-                       .SetAllowRouting(foundAgent.AllowRouting)
+                       .SetAgentType(foundAgent.Type)
                        .SetProfiles(foundAgent.Profiles)
                        .SetRoutingRules(foundAgent.RoutingRules)
                        .SetInstruction(foundAgent.Instruction)
                        .SetTemplates(foundAgent.Templates)
                        .SetFunctions(foundAgent.Functions)
-                       .SetResponses(foundAgent.Responses);
+                       .SetResponses(foundAgent.Responses)
+                       .SetSamples(foundAgent.Samples)
+                       .SetLlmConfig(foundAgent.LlmConfig);
 
             _db.UpdateAgent(clonedAgent, AgentField.All);
+
+            Utilities.ClearCache();
         }
 
         await Task.CompletedTask;
@@ -87,10 +90,12 @@ public partial class AgentService
                 var instruction = FetchInstructionFromFile(dir);
                 var responses = FetchResponsesFromFile(dir);
                 var templates = FetchTemplatesFromFile(dir);
+                var samples = FetchSamplesFromFile(dir);
                 return agent.SetInstruction(instruction)
                             .SetTemplates(templates)
                             .SetFunctions(functions)
-                            .SetResponses(responses);
+                            .SetResponses(responses)
+                            .SetSamples(samples);
             }
         }
 

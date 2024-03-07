@@ -10,10 +10,10 @@ public interface IChatCompletion
     /// <summary>
     /// Set model name, one provider can consume different model or version(s)
     /// </summary>
-    /// <param name="model"></param>
+    /// <param name="model">deployment name</param>
     void SetModelName(string model);
 
-    RoleDialogModel GetChatCompletions(Agent agent,
+    Task<RoleDialogModel> GetChatCompletions(Agent agent,
         List<RoleDialogModel> conversations);
 
     Task<bool> GetChatCompletionsAsync(Agent agent, 

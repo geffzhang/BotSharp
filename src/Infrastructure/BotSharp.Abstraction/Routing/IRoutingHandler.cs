@@ -1,5 +1,4 @@
 using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Models;
 
 namespace BotSharp.Abstraction.Routing;
 
@@ -11,13 +10,11 @@ public interface IRoutingHandler
 {
     string Name { get; }
     string Description { get; }
-    bool IsReasoning { get => false; }
-    bool Enabled { get => true; }
-    List<NameDesc> Parameters { get => new List<NameDesc>(); }
+    List<string> Planers => null;
+    bool Enabled => true;
+    List<ParameterPropertyDef> Parameters => new List<ParameterPropertyDef>();
 
-    void SetRouter(Agent router) { }
+    void SetDialogs(List<RoleDialogModel> dialogs);
 
-    void SetDialogs(List<RoleDialogModel> dialogs) { }
-
-    Task<RoleDialogModel> Handle(IRoutingService routing, FunctionCallFromLlm inst);
+    Task<bool> Handle(IRoutingService routing, FunctionCallFromLlm inst, RoleDialogModel message);
 }

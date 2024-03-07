@@ -1,11 +1,10 @@
-using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
-
 namespace BotSharp.Plugin.MongoStorage;
 
 [BsonIgnoreExtraElements(Inherited = true)]
-public class MongoBase
+public abstract class MongoBase
 {
-    [BsonId(IdGenerator = typeof(GuidGenerator))]
-    public Guid Id { get; set; }
+    [BsonId(IdGenerator = typeof(StringGuidIdGenerator))]
+    public string Id { get; set; }
 }
+
+

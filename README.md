@@ -1,7 +1,7 @@
-# The Open Source LLM Application Framework
-## Connect LLMs to your existing application
+# The Open Source AI Agent Application Framework
+## Connect LLMs to your existing application focused on your business
 
-[![Discord](https://img.shields.io/discord/1106946823282761851?label=Discord)](https://discord.gg/qRVm82fKTS)
+[![Discord](https://img.shields.io/discord/1106946823282761851?label=Discord)](https://discord.com/channels/1106946823282761851/1106947212459642991)
 [![QQ群聊](https://img.shields.io/static/v1?label=QQ&message=群聊&color=brightgreen)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=sN9VVMwbWjs5L0ATpizKKxOcZdEPMrp8&authKey=RLDw41bLTrEyEgZZi%2FzT4pYk%2BwmEFgFcrhs8ZbkiVY7a4JFckzJefaYNW6Lk4yPX&noverify=0&group_code=985366726)
 [![Join the chat at https://gitter.im/publiclab/publiclab](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/sci-sharp/community) 
 [![Apache 2.0](https://img.shields.io/hexpm/l/plug.svg)](https://raw.githubusercontent.com/Oceania2018/BotSharp/master/LICENSE) 
@@ -17,13 +17,19 @@ It's written in C# running on .Net Core that is full cross-platform framework, t
 
 **BotSharp** is in accordance with components principle strictly, decouples every part that is needed in the platform builder. So you can choose different UI/UX, or pick up a different LLM providers. They are all modulized based on unified interfaces. **BotSharp** provides an advanced Agent abstraction layer to efficiently manage complex application scenarios in enterprises, allowing enterprise developers to efficiently integrate AI into business systems.
 
+![](./docs/architecture/assets/botsharp_diagram.png)
+
 ### Some Features
 
-* Built-in multi-agents and conversation management.
-* Support multiple LLM platforms.
-* Support export/ import agent from other bot platforms directly. 
-* Support different open source UI [Chatbot UI](src/Plugins/BotSharp.Plugin.ChatbotUI/Chatbot-UI.md), [HuggingChat UI](src/Plugins/BotSharp.Plugin.HuggingFace/HuggingChat-UI.md).
-* Integrate with popular message channels like Facebook Messenger, Slack and Telegram.
+* Built-in multi-agents and conversation with state management.
+* Support multiple LLM Planning approaches to handle different tasks.
+* Built-in RAG related interfaces, Memeory based vector searching.
+* Support multiple AI platforms (ChatGPT 3.5 / 4.0, PaLM 2, LLaMA 2, HuggingFace).
+* Allow multiple agents with different responsibilities cooperate to complete complex tasks. 
+* Build, test, evaluate and audit your LLM agent in one place.
+* Build-in `BotSharp UI` written in [SvelteKit](https://kit.svelte.dev/).
+* Abstract standard Rich Content data structure. Integrate with popular message channels like Facebook Messenger, Slack and Telegram.
+* Provide RESTful Open API and WebSocket real-time communication.
 
 ### Quick Started
 1. Run backend service
@@ -32,25 +38,82 @@ It's written in C# running on .Net Core that is full cross-platform framework, t
  PS D:\> cd BotSharp
  PS D:\BotSharp\> dotnet run -p .\src\WebStarter
 ```
-2. Run UI project, reference to [Chatbot UI](src/Plugins/BotSharp.Plugin.ChatbotUI/Chatbot-UI.md).
 
-### Extension Libraries
+2. Run Admin UI project, reference to [BotSharp UI](https://github.com/SciSharp/BotSharp-UI).
+```sh
+PS D:\> git clone https://github.com/SciSharp/BotSharp-UI
+PS D:\> cd BotSharp-UI
+PS D:\> npm install
+PS D:\> npm run dev
+```
 
-BotSharp uses component design, the kernel is kept to a minimum, and business functions are implemented by external components. The modular design also allows contributors to better participate.
+Access http://localhost:5015/ 
 
-* Chatbot UI connector. 
-* A channel module of BotSharp for Facebook Messenger.
-* A channel module of BotSharp for Tencent Wechat.
-* A channel module of BotSharp for Telegram.
+[Online Demo with UI](https://botsharp.azurewebsites.net/?wt.mc_id=AI-MVP-5005183)
+
+<img src="./docs/static/screenshots/agent-builder-agents.png" height="450px"/>
+
+### Core Modules
+
+The core module is mainly composed of abstraction and framework function implementation, combined with some common tools.
+
+- Plugin Loader
+- Hooking
+- Authentication
+- Agent Profile
+- Conversation & State
+- Routing & Planning
+- Templating
+- File Repository
+- Caching
+- Rich Content
+- LLM Provider
+
+
+### Plugins
+
+BotSharp uses component design, the kernel is kept to a minimum, and business functions are implemented by external components. The modular design also allows contributors to better participate. Below are the bulit-in plugins:
+
+#### Data Storages
+- BotSharp.Core.Repository
+- BotSharp.Plugin.MongoStorage
+
+#### LLMs
+- BotSharp.Plugin.AzureOpenAI
+- BotSharp.Plugin.GoogleAI
+- BotSharp.Plugin.MetaAI
+- BotSharp.Plugin.HuggingFace
+- BotSharp.Plugin.LLamaSharp
+- BotSharp.Plugin.SemanticKernel
+
+#### Messaging / Channel
+- BotSharp.OpenAPI
+- BotSharp.Plugin.ChatHub
+- BotSharp.Plugin.MetaMessenger
+- BotSharp.Plugin.Twilio
+- BotSharp.Plugin.TelegramBots
+- BotSharp.Plugin.WeChat
+  
+#### RAGs
+- BotSharp.Plugin.KnowledgeBase
+- BotSharp.Plugin.Qdrant
+
+#### Visions
+- BotSharp.Plugin.PaddleSharp
+
+#### Tools
+- BotSharp.Plugin.Dashboard
+- BotSharp.Plugin.RoutingSpeeder
+- BotSharp.Plugin.WebDriver
+- BotSharp.Plugin.PizzaBot
+
+#### UIs
+- BotSharp.Plugin.ChatbotUI
 
 ### Documents
 
-Read the docs: https://botsharp.readthedocs.io
+Read the docs: https://botsharp.readthedocs.io?wt.mc_id=AI-MVP-5005183
 
 If you feel that this project is helpful to you, please Star the project, we would be very grateful.
 
 Member project of [SciSharp STACK](https://github.com/SciSharp) which is the .NET based ecosystem of open-source software for mathematics, science, and engineering.
-
-Scan QR code to join TIM group:
-
-![SciSharp STACK](https://raw.githubusercontent.com/SciSharp/TensorFlow.NET/master/docs/TIM.jpg)

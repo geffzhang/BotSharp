@@ -1,10 +1,7 @@
-using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Agents.Models;
 using BotSharp.Abstraction.Instructs;
 using BotSharp.Abstraction.Instructs.Models;
 using BotSharp.Abstraction.MLTasks;
-using BotSharp.Abstraction.Templating;
-using System.IO;
 
 namespace BotSharp.Core.Instructs;
 
@@ -19,109 +16,96 @@ public partial class InstructService : IInstructService
         _logger = logger;
     }
 
-    public async Task<InstructResult> ExecuteInstruction(Agent agent, 
-        RoleDialogModel message, 
-        Func<RoleDialogModel, Task> onMessageReceived,
-        Func<RoleDialogModel, Task> onFunctionExecuting,
-        Func<RoleDialogModel, Task> onFunctionExecuted)
+    /// <summary>
+    /// Execute completion by using specified instruction or template
+    /// </summary>
+    /// <param name="agentId">Agent (static agent)</param>
+    /// <param name="message">Additional message provided by user</param>
+    /// <param name="templateName">Template name</param>
+    /// <param name="instruction">System prompt</param>
+    /// <returns></returns>
+    public async Task<InstructResult> Execute(string agentId, RoleDialogModel message, string? templateName = null, string? instruction = null)
     {
-        var response = new InstructResult();
+        var agentService = _services.GetRequiredService<IAgentService>();
+        Agent agent = await agentService.LoadAgent(agentId);
 
-        var wholeDialogs = new List<RoleDialogModel>
+        if (agent.Disabled)
         {
-            message
-        };
+            var content = $"This agent ({agent.Name}) is disabled, please install the corresponding plugin ({agent.Plugin.Name}) to activate this agent.";
+            return new InstructResult
+            {
+                MessageId = message.MessageId,
+                Text = content
+            };
+        }
 
         // Trigger before completion hooks
         var hooks = _services.GetServices<IInstructHook>();
         foreach (var hook in hooks)
         {
-            await hook.BeforeCompletion(message);
+            if (!string.IsNullOrEmpty(hook.SelfId) && hook.SelfId != agentId)
+            {
+                continue;
+            }
+
+            await hook.BeforeCompletion(agent, message);
+
+            // Interrupted by hook
+            if (message.StopCompletion)
+            {
+                return new InstructResult
+                {
+                    MessageId = message.MessageId,
+                    Text = message.Content
+                };
+            }
         }
 
-        await ExecuteInstructionRecursively(agent,
-            wholeDialogs,
-            async msg =>
+        // Render prompt
+        var prompt = string.IsNullOrEmpty(templateName) ?
+            agentService.RenderedInstruction(agent) :
+            agentService.RenderedTemplate(agent, templateName);
+
+        var completer = CompletionProvider.GetCompletion(_services,
+            agentConfig: agent.LlmConfig);
+        var response = new InstructResult
+        {
+            MessageId = message.MessageId
+        };
+        if (completer is ITextCompletion textCompleter)
+        {
+            var result = await textCompleter.GetCompletion(prompt, agentId, message.MessageId);
+            response.Text = result;
+        }
+        else if (completer is IChatCompletion chatCompleter)
+        {
+            var result = await chatCompleter.GetChatCompletions(new Agent
             {
-                response.Text = msg.Content;
-                await onMessageReceived(msg);
-            },
-            async fn =>
+                Id = agentId,
+                Name = agent.Name,
+                Instruction = instruction
+            }, new List<RoleDialogModel>
             {
-                response.Function = fn.FunctionName;
-                await onFunctionExecuting(fn);
-            },
-            async fn =>
-            {
-                response.Data = fn.ExecutionData;
-                await onFunctionExecuted(fn);
+                new RoleDialogModel(AgentRole.User, prompt)
+                {
+                    CurrentAgentId = agentId,
+                    MessageId = message.MessageId
+                }
             });
+            response.Text = result.Content;
+        }
+
 
         foreach (var hook in hooks)
         {
-            await hook.AfterCompletion(response);
+            if (!string.IsNullOrEmpty(hook.SelfId) && hook.SelfId != agentId)
+            {
+                continue;
+            }
+
+            await hook.AfterCompletion(agent, response);
         }
 
         return response;
-    }
-
-    private async Task<bool> ExecuteInstructionRecursively(Agent agent,
-        List<RoleDialogModel> wholeDialogs,
-        Func<RoleDialogModel, Task> onMessageReceived, 
-        Func<RoleDialogModel, Task> onFunctionExecuting, 
-        Func<RoleDialogModel, Task> onFunctionExecuted)
-    {
-        var chatCompletion = CompletionProvider.GetChatCompletion(_services);
-
-        var result = await chatCompletion.GetChatCompletionsAsync(agent, wholeDialogs, async msg =>
-        {
-            await onMessageReceived(msg);
-
-            wholeDialogs.Add(msg);
-        }, async fn =>
-        {
-            var preAgentId = agent.Id;
-
-            await HandleFunctionMessage(fn, onFunctionExecuting, onFunctionExecuted);
-
-            // Function executed has exception
-            if (fn.ExecutionResult == null || fn.StopCompletion)
-            {
-                await onMessageReceived(new RoleDialogModel(AgentRole.Assistant, fn.Content));
-                return;
-            }
-
-            fn.Content = fn.FunctionArgs.Replace("\r", " ").Replace("\n", " ").Trim() + " => " + fn.ExecutionResult;
-
-            // Find response template
-            var templateService = _services.GetRequiredService<IResponseTemplateService>();
-            var response = await templateService.RenderFunctionResponse(agent.Id, fn);
-            if (!string.IsNullOrEmpty(response))
-            {
-                await onMessageReceived(new RoleDialogModel(AgentRole.Assistant, response));
-                return;
-            }
-
-            // After function is executed, pass the result to LLM to get a natural response
-            wholeDialogs.Add(fn);
-
-            await ExecuteInstructionRecursively(agent,
-                wholeDialogs,
-                onMessageReceived,
-                onFunctionExecuting,
-                onFunctionExecuted);
-        });
-
-        return result;
-    }
-
-    private async Task HandleFunctionMessage(RoleDialogModel msg,
-        Func<RoleDialogModel, Task> onFunctionExecuting,
-        Func<RoleDialogModel, Task> onFunctionExecuted)
-    {
-        // Call functions
-        await onFunctionExecuting(msg);
-        await CallFunctions(msg);
-        await onFunctionExecuted(msg);
     }
 }

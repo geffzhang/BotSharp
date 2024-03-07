@@ -1,8 +1,9 @@
 <Project>
- <PropertyGroup>
-   <LangVersion>10.0</LangVersion>
-   <OutputPath>..\..\..\packages</OutputPath>
-   <BotSharpVersion>0.16.2</BotSharpVersion>
-   <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
- </PropertyGroup>
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <LangVersion>10.0</LangVersion>
+        <BotSharpVersion>1.0.1</BotSharpVersion>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    </PropertyGroup>
 </Project>

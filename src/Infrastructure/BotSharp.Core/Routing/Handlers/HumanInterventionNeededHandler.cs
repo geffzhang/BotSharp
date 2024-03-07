@@ -1,5 +1,3 @@
-using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Routing;
 using BotSharp.Abstraction.Routing.Settings;
 
 namespace BotSharp.Core.Routing.Handlers;
@@ -8,24 +6,32 @@ public class HumanInterventionNeededHandler : RoutingHandlerBase, IRoutingHandle
 {
     public string Name => "human_intervention_needed";
 
-    public string Description => "Reach out to a real human or customer representative.";
+    public string Description => "Reach out to human being, customer service or customer representative.";
 
-    private readonly RoutingSettings _settings;
+    public List<ParameterPropertyDef> Parameters => new List<ParameterPropertyDef>
+    {
+        new ParameterPropertyDef("reason", "why need customer service"),
+        new ParameterPropertyDef("summary", "the whole conversation summary with important information"),
+        new ParameterPropertyDef("response", "response content to user")
+    };
 
     public HumanInterventionNeededHandler(IServiceProvider services, ILogger<HumanInterventionNeededHandler> logger, RoutingSettings settings)
         : base(services, logger, settings)
     {
-        _settings = settings;
+        
     }
 
-    public async Task<RoleDialogModel> Handle(IRoutingService routing, FunctionCallFromLlm inst)
+    public async Task<bool> Handle(IRoutingService routing, FunctionCallFromLlm inst, RoleDialogModel message)
     {
-        var result = new RoleDialogModel(AgentRole.Assistant, inst.Response)
+        var response = new RoleDialogModel(AgentRole.Assistant, inst.Response)
         {
-            CurrentAgentId = _settings.RouterId,
-            FunctionName = inst.Function,
-            ExecutionData = inst
+            CurrentAgentId = message.CurrentAgentId,
+            MessageId = message.MessageId,
+            StopCompletion = true,
+            FunctionName = inst.Function
         };
+
+        _dialogs.Add(response);
 
         var hooks = _services.GetServices<IConversationHook>()
             .OrderBy(x => x.Priority)
@@ -33,9 +39,9 @@ public class HumanInterventionNeededHandler : RoutingHandlerBase, IRoutingHandle
 
         foreach (var hook in hooks)
         {
-            await hook.HumanInterventionNeeded(result);
+            await hook.OnHumanInterventionNeeded(response);
         }
 
-        return result;
+        return true;
     }
 }

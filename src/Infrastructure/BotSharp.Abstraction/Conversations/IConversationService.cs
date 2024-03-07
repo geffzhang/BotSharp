@@ -1,32 +1,39 @@
+using BotSharp.Abstraction.Loggers.Models;
+using BotSharp.Abstraction.Repositories.Filters;
+
 namespace BotSharp.Abstraction.Conversations;
 
 public interface IConversationService
 {
     IConversationStateService States { get; }
+    string ConversationId { get; }
     Task<Conversation> NewConversation(Conversation conversation);
     void SetConversationId(string conversationId, List<string> states);
     Task<Conversation> GetConversation(string id);
-    Task<List<Conversation>> GetConversations();
-    Task DeleteConversation(string id);
+    Task<PagedItems<Conversation>> GetConversations(ConversationFilter filter);
+    Task<Conversation> UpdateConversationTitle(string id, string title);
+    Task<List<Conversation>> GetLastConversations();
+    Task<List<string>> GetIdleConversations(int batchSize, int messageLimit, int bufferHours);
+    Task<bool> DeleteConversations(IEnumerable<string> ids);
+    Task<bool> TruncateConversation(string conversationId, string messageId);
+    Task<List<ContentLogOutputModel>> GetConversationContentLogs(string conversationId);
+    Task<List<ConversationStateLogModel>> GetConversationStateLogs(string conversationId);
 
     /// <summary>
     /// Send message to LLM
     /// </summary>
     /// <param name="agentId"></param>
-    /// <param name="conversationId"></param>
     /// <param name="lastDalog"></param>
-    /// <param name="onMessageReceived"></param>
+    /// <param name="onResponseReceived">Received the response from AI Agent</param>
     /// <param name="onFunctionExecuting">This delegate is useful when you want to report progress on UI</param>
     /// <param name="onFunctionExecuted">This delegate is useful when you want to report progress on UI</param>
     /// <returns></returns>
-    Task<bool> SendMessage(string agentId, 
+    Task<bool> SendMessage(string agentId,
         RoleDialogModel lastDalog, 
-        Func<RoleDialogModel, Task> onMessageReceived, 
+        Func<RoleDialogModel, Task> onResponseReceived, 
         Func<RoleDialogModel, Task> onFunctionExecuting,
         Func<RoleDialogModel, Task> onFunctionExecuted);
 
-    List<RoleDialogModel> GetDialogHistory(int lastCount = 20);
+    List<RoleDialogModel> GetDialogHistory(int lastCount = 50);
     Task CleanHistory(string agentId);
-
-    Task CallFunctions(RoleDialogModel msg);
 }

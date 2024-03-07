@@ -1,6 +1,4 @@
 using BotSharp.Abstraction.Functions;
-using BotSharp.Abstraction.Repositories;
-using BotSharp.Abstraction.Routing;
 using BotSharp.Abstraction.Routing.Models;
 using System.Drawing;
 
@@ -13,9 +11,9 @@ public class RouteToAgentFn : IFunctionCallback
 {
     public string Name => "route_to_agent";
     private readonly IServiceProvider _services;
-    private readonly RoutingContext _context;
+    private readonly IRoutingContext _context;
 
-    public RouteToAgentFn(IServiceProvider services, RoutingContext context)
+    public RouteToAgentFn(IServiceProvider services, IRoutingContext context)
     {
         _services = services;
         _context = context;
@@ -24,56 +22,76 @@ public class RouteToAgentFn : IFunctionCallback
     public async Task<bool> Execute(RoleDialogModel message)
     {
         var args = JsonSerializer.Deserialize<RoutingArgs>(message.FunctionArgs);
+        var states = _services.GetRequiredService<IConversationStateService>();
 
         // Push original task agent
         if (!string.IsNullOrEmpty(args.OriginalAgent) && args.OriginalAgent.Length < 32)
         {
+            // Correct user goal agent to keep orignal task
+            var goalAgentInState = states.GetState("user_goal_agent", string.Empty);
+            bool correctToOriginalAgent = false;
+            if (goalAgentInState == string.Empty)
+            {
+                states.SetState("user_goal_agent", args.OriginalAgent, isNeedVersion: true);
+            }
+            else if (args.OriginalAgent == args.AgentName && args.OriginalAgent != goalAgentInState)
+            {
+                // Correct to original agent
+                args.OriginalAgent = goalAgentInState;
+                correctToOriginalAgent = true;
+            }
+            else if (args.OriginalAgent != args.AgentName && args.OriginalAgent != goalAgentInState)
+            {
+                // Correct to original agent
+                states.SetState("user_goal_agent", args.OriginalAgent, isNeedVersion: true);
+            }
+
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            var originalAgent = db.Agents.FirstOrDefault(x => x.Name.ToLower() == args.OriginalAgent.ToLower());
+            var filter = new AgentFilter { AgentName = args.OriginalAgent };
+            var originalAgent = db.GetAgents(filter).FirstOrDefault();
             if (originalAgent != null)
             {
-                _context.Push(originalAgent.Id);
+                _context.Push(originalAgent.Id, $"user goal agent{(correctToOriginalAgent ? " & is corrected" : "")}");
             }
         }
-        else
+
+        // Push next action agent
+        if (!string.IsNullOrEmpty(args.AgentName) && args.AgentName.Length < 32)
         {
-            // Push current agent to routing stack
-            _context.Push(message.CurrentAgentId);
+            _context.Push(args.AgentName, args.Reason);
+            states.SetState("next_action_agent", args.AgentName, isNeedVersion: true);
         }
 
         if (string.IsNullOrEmpty(args.AgentName))
         {
-            message.ExecutionResult = $"missing agent name";
+            message.Content = $"missing agent name";
         }
         else
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            var targetAgent = db.Agents.FirstOrDefault(x => x.Name.ToLower() == args.AgentName.ToLower());
+            var filter = new AgentFilter { AgentName = args.AgentName };
+            var targetAgent = db.GetAgents(filter).FirstOrDefault();
             if (targetAgent == null)
             {
-                message.ExecutionData = JsonSerializer.Deserialize<JsonElement>(message.FunctionArgs);
+                message.Data = JsonSerializer.Deserialize<JsonElement>(message.FunctionArgs);
+                return false;
+            }
+
+            if (targetAgent.Disabled)
+            {
                 return false;
             }
 
             var missingfield = HasMissingRequiredField(message, out var agentId);
             if (missingfield && message.CurrentAgentId != agentId)
             {
-                // Stack original Agent
-                _context.Push(targetAgent.Id);
-
-                message.CurrentAgentId = agentId;
-            }
-            else
-            {
-                message.CurrentAgentId = targetAgent.Id;
-                message.ExecutionResult = $"Routing to {args.AgentName}";
+                // Stack redirection agent
+                _context.Push(agentId, reason: $"REDIRECTION {message.Content}");
             }
         }
 
-        _context.Push(message.CurrentAgentId);
+        message.CurrentAgentId = _context.GetCurrentAgentId();
 
-        // Set default execution data
-        message.ExecutionData = JsonSerializer.Deserialize<JsonElement>(message.FunctionArgs);
         return true;
     }
 
@@ -84,9 +102,9 @@ public class RouteToAgentFn : IFunctionCallback
     private bool HasMissingRequiredField(RoleDialogModel message, out string agentId)
     {
         var args = JsonSerializer.Deserialize<RoutingArgs>(message.FunctionArgs);
-        var router = _services.GetRequiredService<IRouterInstance>();
+        var routing = _services.GetRequiredService<IRoutingService>();
 
-        var routingRules = router.GetRulesByName(args.AgentName);
+        var routingRules = routing.GetRulesByAgentName(args.AgentName);
 
         if (routingRules == null || !routingRules.Any())
         {
@@ -130,15 +148,14 @@ public class RouteToAgentFn : IFunctionCallback
         {
             // Add field to args
             message.FunctionArgs = AppendPropertyToArgs(message.FunctionArgs, "missing_fields", missingFields);
-            message.ExecutionResult = $"missing some information: {string.Join(',', missingFields)}";
-            message.Content = message.ExecutionResult;
+            message.Content = $"missing some information: {string.Join(", ", missingFields)}";
 
             // Handle redirect
             var routingRule = routingRules.FirstOrDefault(x => missingFields.Contains(x.Field));
             if (!string.IsNullOrEmpty(routingRule.RedirectTo))
             {
                 var db = _services.GetRequiredService<IBotSharpRepository>();
-                var record = db.Agents.First(x => x.Id == routingRule.RedirectTo);
+                var record = db.GetAgent(routingRule.RedirectTo);
 
                 // Add redirected agent
                 message.FunctionArgs = AppendPropertyToArgs(message.FunctionArgs, "redirect_to", record.Name);

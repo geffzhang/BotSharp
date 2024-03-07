@@ -9,24 +9,28 @@ public class TextEmbeddingProvider : ITextEmbedding
     private readonly IServiceProvider _services;
     public int Dimension => 4096;
 
+    public string Provider => "llama-sharp";
+
     public TextEmbeddingProvider(IServiceProvider services, LlamaSharpSettings settings)
     {
         _services = services;
         _settings = settings;
     }
 
-    public float[] GetVector(string text)
+    public Task<float[]> GetVectorAsync(string text)
     {
         if (_embedder == null)
         {
             var path = Path.Combine(_settings.ModelDir, _settings.DefaultModel);
-            _embedder = new LLamaEmbedder(new ModelParams(path));
+            var @params = new ModelParams(path);
+            using var weights = LLamaWeights.LoadFromFile(@params);
+            _embedder = new LLamaEmbedder(weights, @params);
         }
 
-        return _embedder.GetEmbeddings(text);
+        return Task.FromResult(_embedder.GetEmbeddings(text));
     }
 
-    public List<float[]> GetVectors(List<string> texts)
+    public Task<List<float[]>> GetVectorsAsync(List<string> texts)
     {
         throw new NotImplementedException();
     }
