@@ -1,0 +1,7 @@
+I have scheduled a job named "{{ name }}" {% if description %}with description "{{ description }}"{% endif %} using Dapr Jobs API. 
+
+{% if due_time %}The job is scheduled to run at {{ due_time }}.{% endif %}
+{% if period %}It will repeat every {{ period }} seconds{% if repeats %} for {{ repeats }} times{% endif %}.{% endif %}
+{% if ttl %}The job will expire after {{ ttl }} seconds if not executed.{% endif %}
+
+The job has been submitted to the Dapr Jobs service and will be executed according to the specified schedule.

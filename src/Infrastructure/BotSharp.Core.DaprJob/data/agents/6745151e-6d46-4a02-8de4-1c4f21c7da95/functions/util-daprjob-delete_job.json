@@ -1,0 +1,14 @@
+{
+  "name": "delete_job",
+  "description": "Delete a scheduled job using Dapr Jobs API building block. This function allows you to remove a previously scheduled job.",
+  "parameters": {
+    "type": "object",
+    "required": [ "name" ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "The name of the job to delete"
+      }
+    }
+  }
+}
