@@ -1,0 +1,38 @@
+{
+  "name": "schedule_job",
+  "description": "Schedule a job using Dapr Jobs API building block. This function allows you to schedule tasks that will be executed at a specific time or repeatedly.",
+  "parameters": {
+    "type": "object",
+    "required": [ "name" ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "The unique name of the job"
+      },
+      "description": {
+        "type": "string",
+        "description": "Description of what the job does"
+      },
+      "due_time": {
+        "type": "string",
+        "description": "When to run the job (ISO 8601 format)"
+      },
+      "data": {
+        "type": "string",
+        "description": "Job data payload"
+      },
+      "ttl": {
+        "type": "integer",
+        "description": "Time to live in seconds"
+      },
+      "period": {
+        "type": "integer",
+        "description": "Repeat period in seconds"
+      },
+      "repeats": {
+        "type": "integer",
+        "description": "Number of repeats"
+      }
+    }
+  }
+}
