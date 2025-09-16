@@ -1,6 +1,11 @@
-using BotSharp.Abstraction.Loggers;
-using BotSharp.Abstraction.Routing;
+using BotSharp.Abstraction.Crontab;
+using BotSharp.Abstraction.MessageHub.Models;
+using BotSharp.Abstraction.MessageHub.Observers;
+using BotSharp.Core.MessageHub;
+using BotSharp.Core.MessageHub.Observers;
 using BotSharp.Plugin.ChatHub.Hooks;
+using BotSharp.Plugin.ChatHub.Observers;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 
 namespace BotSharp.Plugin.ChatHub;
@@ -17,11 +22,18 @@ public class ChatHubPlugin : IBotSharpPlugin
 
     public void RegisterDI(IServiceCollection services, IConfiguration config)
     {
+        var settings = new ChatHubSettings();
+        config.Bind("ChatHub", settings);
+        services.AddSingleton(x => settings);
+
+        services.AddScoped<IBotSharpObserver<HubObserveData<RoleDialogModel>>, ChatHubObserver>();
+
         // Register hooks
         services.AddScoped<IConversationHook, ChatHubConversationHook>();
         services.AddScoped<IConversationHook, StreamingLogHook>();
         services.AddScoped<IConversationHook, WelcomeHook>();
         services.AddScoped<IRoutingHook, StreamingLogHook>();
         services.AddScoped<IContentGeneratingHook, StreamingLogHook>();
+        services.AddScoped<ICrontabHook, ChatHubCrontabHook>();
     }
 }

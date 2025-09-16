@@ -1,3 +1,5 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
+using BotSharp.Abstraction.Routing.Enums;
 using BotSharp.Abstraction.Routing.Settings;
 
 namespace BotSharp.Core.Routing;
@@ -9,6 +11,8 @@ public class RoutingContext : IRoutingContext
     private string[] _routerAgentIds;
     private string _conversationId;
     private string _messageId;
+    private int _currentRecursionDepth = 0;
+    private List<RoleDialogModel> _dialogs = [];
 
     public RoutingContext(IServiceProvider services, RoutingSettings setting)
     {
@@ -19,9 +23,9 @@ public class RoutingContext : IRoutingContext
     public int AgentCount => _stack.Count;
     public string ConversationId => _conversationId;
     public string MessageId => _messageId;
+    public int CurrentRecursionDepth => _currentRecursionDepth;
 
-    private Stack<string> _stack { get; set; }
-        = new Stack<string>();
+    private Stack<string> _stack { get; set; } = new();
 
     /// <summary>
     /// Intent name
@@ -40,12 +44,23 @@ public class RoutingContext : IRoutingContext
                 var agentService = _services.GetRequiredService<IAgentService>();
                 _routerAgentIds = agentService.GetAgents(new AgentFilter
                 {
-                    Type = AgentType.Routing
-                }).Result.Items
-                .Select(x => x.Id).ToArray();
+                    Types = [AgentType.Routing],
+                    Pager = new Pagination { Size = 100 }
+                }).Result.Items.Select(x => x.Id).ToArray();
             }
 
-            return _stack.Where(x => !_routerAgentIds.Contains(x)).Last();
+            return _stack.Where(x => !_routerAgentIds.Contains(x)).LastOrDefault() ?? string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Entry agent
+    /// </summary>
+    public string EntryAgentId
+    {
+        get
+        {
+            return _stack.LastOrDefault() ?? string.Empty;
         }
     }
 
@@ -66,16 +81,18 @@ public class RoutingContext : IRoutingContext
     /// </summary>
     /// <param name="agentId">Id or Name</param>
     /// <param name="reason"></param>
-    public void Push(string agentId, string? reason = null)
+    public void Push(string agentId, string? reason = null, bool updateLazyRouting = true)
     {
         // Convert id to name
         if (!Guid.TryParse(agentId, out _))
         {
             var agentService = _services.GetRequiredService<IAgentService>();
-            agentId = agentService.GetAgents(new AgentFilter
+            var agents = agentService.GetAgentOptions([agentId], byName: true).Result;
+
+            if (agents.Count > 0)
             {
-                AgentName = agentId
-            }).Result.Items.First().Id;
+                agentId = agents.First().Id;
+            }
         }
 
         if (_stack.Count == 0 || _stack.Peek() != agentId)
@@ -83,16 +100,17 @@ public class RoutingContext : IRoutingContext
             var preAgentId = _stack.Count == 0 ? agentId : _stack.Peek();
             _stack.Push(agentId);
 
-            HookEmitter.Emit<IRoutingHook>(_services, async hook =>
-                await hook.OnAgentEnqueued(agentId, preAgentId, reason: reason)
-            ).Wait();
+            HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentEnqueued(agentId, preAgentId, reason: reason),
+                agentId).Wait();
+
+            UpdateLazyRoutingAgent(updateLazyRouting);
         }
     }
 
     /// <summary>
     /// Pop current agent
     /// </summary>
-    public void Pop(string? reason = null)
+    public void Pop(string? reason = null, bool updateLazyRouting = true)
     {
         if (_stack.Count == 0)
         {
@@ -102,12 +120,55 @@ public class RoutingContext : IRoutingContext
         var agentId = _stack.Pop();
         var currentAgentId = GetCurrentAgentId();
 
-        HookEmitter.Emit<IRoutingHook>(_services, async hook =>
-            await hook.OnAgentDequeued(agentId, currentAgentId, reason: reason)
-        ).Wait();
+        HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentDequeued(agentId, currentAgentId, reason: reason),
+            agentId).Wait();
+
+        if (string.IsNullOrEmpty(currentAgentId))
+        {
+            return;
+        }
+
+        // Run the routing rule
+        var agency = _services.GetRequiredService<IAgentService>();
+        var agent = agency.GetAgent(currentAgentId).Result;
+
+        var message = new RoleDialogModel(AgentRole.User, $"Try to route to agent {agent.Name}")
+        {
+            CurrentAgentId = currentAgentId,
+            FunctionName = "route_to_agent",
+            FunctionArgs = JsonSerializer.Serialize(new FunctionCallFromLlm
+            {
+                Function = "route_to_agent",
+                AgentName = agent.Name,
+                NextActionReason = $"User manually route to agent {agent.Name}"
+            })
+        };
+
+        var routing = _services.GetRequiredService<IRoutingService>();
+        var (missingfield, _) = routing.HasMissingRequiredField(message, out agentId);
+        if (missingfield)
+        {
+            if (currentAgentId != agentId)
+            {
+                _stack.Push(agentId);
+            }
+        }
+
+        UpdateLazyRoutingAgent(updateLazyRouting);
     }
 
-    public string PreviousAgentId()
+    public void PopTo(string agentId, string reason, bool updateLazyRouting = true)
+    {
+        var currentAgentId = GetCurrentAgentId();
+        while (!string.IsNullOrEmpty(currentAgentId) && 
+            currentAgentId != agentId)
+        {
+            Pop(reason, updateLazyRouting: updateLazyRouting);
+            currentAgentId = GetCurrentAgentId();
+        }
+    }
+
+    public string FirstGoalAgentId()
     {
         if (_stack.Count == 1)
         {
@@ -115,13 +176,18 @@ public class RoutingContext : IRoutingContext
         }
         else if (_stack.Count > 1)
         {
-            return _stack.ToArray()[1];
+            return _stack.ToArray()[_stack.Count - 2];
         }
 
         return string.Empty;
     }
 
-    public void Replace(string agentId, string? reason = null)
+    public bool ContainsAgentId(string agentId)
+    {
+        return _stack.ToArray().Contains(agentId);
+    }
+
+    public void Replace(string agentId, string? reason = null, bool updateLazyRouting = true)
     {
         var fromAgent = agentId;
         var toAgent = agentId;
@@ -136,10 +202,11 @@ public class RoutingContext : IRoutingContext
             _stack.Pop();
             _stack.Push(agentId);
 
-            HookEmitter.Emit<IRoutingHook>(_services, async hook =>
-                await hook.OnAgentReplaced(fromAgent, toAgent, reason: reason)
-            ).Wait();
+            HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentReplaced(fromAgent, toAgent, reason: reason),
+                agentId).Wait();
         }
+
+        UpdateLazyRoutingAgent(updateLazyRouting);
     }
 
     public void Empty(string? reason = null)
@@ -151,14 +218,87 @@ public class RoutingContext : IRoutingContext
 
         var agentId = GetCurrentAgentId();
         _stack.Clear();
-        HookEmitter.Emit<IRoutingHook>(_services, async hook =>
-            await hook.OnAgentQueueEmptied(agentId, reason: reason)
-        ).Wait();
+        HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentQueueEmptied(agentId, reason: reason),
+            agentId).Wait();
     }
 
     public void SetMessageId(string conversationId, string messageId)
     {
         _conversationId = conversationId;
         _messageId = messageId;
+    }
+
+    public int GetRecursiveCounter()
+    {
+        return _currentRecursionDepth;
+    }
+
+    public void IncreaseRecursiveCounter()
+    {
+        _currentRecursionDepth++;
+    }
+
+    public void SetRecursiveCounter(int counter)
+    {
+        _currentRecursionDepth = counter;
+    }
+
+    public void ResetRecursiveCounter()
+    {
+        _currentRecursionDepth = 0;
+    }
+
+    public Stack<string> GetAgentStack()
+    {
+        var copy = _stack.ToList();
+        copy.Reverse();
+        return new Stack<string>(copy);
+    }
+
+    public void SetAgentStack(Stack<string> stack)
+    {
+        var copy = stack.ToList();
+        copy.Reverse();
+        _stack = new Stack<string>(copy);
+    }
+
+    public void ResetAgentStack()
+    {
+        _stack.Clear();
+    }
+
+    public void SetDialogs(List<RoleDialogModel> dialogs)
+    {
+        _dialogs = dialogs ?? [];
+    }
+
+    public List<RoleDialogModel> GetDialogs()
+    {
+        return _dialogs ?? [];
+    }
+
+    public void ResetDialogs()
+    {
+        _dialogs = [];
+    }
+
+    private void UpdateLazyRoutingAgent(bool updateLazyRouting)
+    {
+        if (!updateLazyRouting)
+        {
+            return;
+        }
+
+        // Set next handling agent for lazy routing mode
+        var states = _services.GetRequiredService<IConversationStateService>();
+        var routingMode = states.GetState(StateConst.ROUTING_MODE, RoutingMode.Eager);
+        if (routingMode == RoutingMode.Lazy)
+        {
+            var agentId = GetCurrentAgentId();
+            if (agentId != BuiltInAgentId.Fallback)
+            {
+                states.SetState(StateConst.LAZY_ROUTING_AGENT_ID, agentId);
+            }
+        }
     }
 }

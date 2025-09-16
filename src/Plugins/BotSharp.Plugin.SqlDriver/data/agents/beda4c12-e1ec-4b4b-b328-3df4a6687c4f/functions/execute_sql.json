@@ -1,0 +1,32 @@
+{
+  "name": "execute_sql",
+  "description": "Run the sql statements provided in the last converastion",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "sql_statements": {
+        "type": "array",
+        "description": "raw sql statements",
+        "items": {
+          "type": "string",
+          "description": "sql statement"
+        }
+      },
+
+      "formatting_result": {
+        "type": "boolean",
+        "description": "formatting the results"
+      },
+
+      "tables": {
+        "type": "array",
+        "description": "all related tables in the sql statements",
+        "items": {
+          "type": "string",
+          "description": "table name"
+        }
+      }
+    },
+    "required": [ "sql_statements", "tables", "formatting_result" ]
+  }
+}

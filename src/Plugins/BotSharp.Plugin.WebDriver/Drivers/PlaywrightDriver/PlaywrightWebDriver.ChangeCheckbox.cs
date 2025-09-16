@@ -1,13 +1,12 @@
-using Microsoft.Extensions.Logging;
-using System.Text.RegularExpressions;
-
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver
 {
-    public async Task<bool> ChangeCheckbox(BrowserActionParams actionParams)
+    public async Task<BrowserActionResult> ChangeCheckbox(BrowserActionParams actionParams)
     {
-        await _instance.Wait(actionParams.ConversationId);
+        var result = new BrowserActionResult();
+
+        await _instance.Wait(actionParams.ContextId);
 
         // Retrieve the page raw html and infer the element path
         var regexExpression = actionParams.Context.MatchRule.ToLower() switch
@@ -18,29 +17,33 @@ public partial class PlaywrightWebDriver
             _ => $"^{actionParams.Context.ElementText}$"
         };
         var regex = new Regex(regexExpression, RegexOptions.IgnoreCase);
-        var elements = _instance.GetPage(actionParams.ConversationId).GetByText(regex);
+        var elements = _instance.GetPage(actionParams.ContextId).GetByText(regex);
         var count = await elements.CountAsync();
 
+        var errorMessage = $"Can't locate element by keyword {actionParams.Context.ElementText}";
         if (count == 0)
         {
-            return false;
+            result.Message = errorMessage;
+            return result;
         }
         else if (count > 1)
         {
-            _logger.LogError($"Located multiple elements by {actionParams.Context.ElementText}");
+            result.Message = $"Located multiple elements by {actionParams.Context.ElementText}";
+            _logger.LogError(result.Message);
             var allElements = await elements.AllAsync();
             foreach (var element in allElements)
             {
 
             }
-            return false;
+            return result;
         }
 
         var parentElement = elements.Locator("..");
         count = await parentElement.CountAsync();
         if (count == 0)
         {
-            return false;
+            result.Message = errorMessage;
+            return result;
         }
 
         var id = await elements.GetAttributeAsync("for");
@@ -50,18 +53,20 @@ public partial class PlaywrightWebDriver
         }
         else
         {
-            elements = _instance.GetPage(actionParams.ConversationId).Locator($"#{id}");
+            elements = _instance.GetPage(actionParams.ContextId).Locator($"#{id}");
         }
         count = await elements.CountAsync();
 
         if (count == 0)
         {
-            return false;
+            result.Message = errorMessage;
+            return result;
         }
         else if (count > 1)
         {
-            _logger.LogError($"Located multiple elements by {actionParams.Context.ElementText}");
-            return false;
+            result.Message = $"Located multiple elements by {actionParams.Context.ElementText}";
+            _logger.LogError(result.Message);
+            return result;
         }
 
         try
@@ -76,13 +81,15 @@ public partial class PlaywrightWebDriver
                 await elements.ClickAsync();
             }
 
-            return true;
+            result.IsSuccess = true;
         }
         catch (Exception ex)
         {
+            result.Message = ex.Message;
+            result.StackTrace = ex.StackTrace;
             _logger.LogError(ex.Message);
         }
 
-        return false;
+        return result;
     }
 }

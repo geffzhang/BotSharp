@@ -1,3 +1,5 @@
+using BotSharp.Abstraction.Browsing.Settings;
+
 namespace BotSharp.Plugin.WebDriver.Functions;
 
 public class GoToPageFn : IFunctionCallback
@@ -25,14 +27,28 @@ public class GoToPageFn : IFunctionCallback
         var url = webDriverService.ReplaceToken(args.Url);
 
         url = url.Replace("https://https://", "https://");
-
-        var result = await _browser.GoToPage(convService.ConversationId, url);
-        message.Content = result ? $"Page {url} is open." : $"Page {url} open failed.";
+        var _webDriver = _services.GetRequiredService<WebBrowsingSettings>();
+        var result = await _browser.GoToPage(new MessageInfo
+        {
+            AgentId = message.CurrentAgentId,
+            ContextId = webDriverService.GetMessageContext(message),
+            MessageId = message.MessageId
+        }, new PageActionArgs
+        {
+            Url = url,
+            Timeout = _webDriver.DefaultTimeout
+        });
+        message.Content = result.IsSuccess ? $"Page {url} is open." : $"Page {url} open failed. {result.Message}";
 
         var path = webDriverService.GetScreenshotFilePath(message.MessageId);
 
-        message.Data = await _browser.ScreenshotAsync(convService.ConversationId, path);
+        message.Data = await _browser.ScreenshotAsync(new MessageInfo
+        {
+            AgentId = message.CurrentAgentId,
+            ContextId = webDriverService.GetMessageContext(message),
+            MessageId = message.MessageId
+        }, path);
 
-        return result;
+        return result.IsSuccess;
     }
 }

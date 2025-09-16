@@ -24,14 +24,19 @@ public class CheckRadioButtonFn : IFunctionCallback
         var result = await _browser.CheckRadioButton(new BrowserActionParams(agent, args, convService.ConversationId, message.MessageId));
 
         var content = $"Check value of '{args.UpdateValue}' for radio button '{args.ElementName}'";
-        message.Content = result ?
+        message.Content = result.IsSuccess ?
             $"{content} successfully" :
-            $"{content} failed";
+            $"{content} failed. {result.Message}";
 
         var webDriverService = _services.GetRequiredService<WebDriverService>();
         var path = webDriverService.GetScreenshotFilePath(message.MessageId);
 
-        message.Data = await _browser.ScreenshotAsync(convService.ConversationId, path);
+        message.Data = await _browser.ScreenshotAsync(new MessageInfo
+        {
+            AgentId = message.CurrentAgentId,
+            ContextId = webDriverService.GetMessageContext(message),
+            MessageId = message.MessageId
+        }, path);
 
         return true;
     }

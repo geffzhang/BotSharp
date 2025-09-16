@@ -96,6 +96,15 @@ The main documentation for the site is organized into the following sections:
    llm/few-shot-learning
    llm/provider
 
+.. _llamasharp:
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Use Local LLM Models
+
+   llama-sharp/config-llamasharp
+   llama-sharp/use-llamasharp-in-ui
+
 .. _architecture-docs:
 
 .. toctree::
@@ -106,6 +115,7 @@ The main documentation for the site is organized into the following sections:
    architecture/plugin
    architecture/hooks
    architecture/routing
+   architecture/agent-utility
    architecture/logging
    architecture/data-persistence
 

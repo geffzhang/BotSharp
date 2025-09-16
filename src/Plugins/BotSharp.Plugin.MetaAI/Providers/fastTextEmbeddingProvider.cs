@@ -1,4 +1,5 @@
 using BotSharp.Abstraction.MLTasks;
+using BotSharp.Abstraction.Models;
 using BotSharp.Plugin.MetaAI.Settings;
 using FastText.NetWrapper;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,16 +15,10 @@ public class fastTextEmbeddingProvider : ITextEmbedding
     private FastTextWrapper _fastText;
     private readonly IServiceProvider _services;
 
-    public int Dimension
-    {
-        get
-        {
-            LoadModel();
-            return _fastText.GetModelDimension();
-        }
-    }
+    private int _dimension;
 
     public string Provider => "meta-ai";
+    public string Model => string.Empty;
 
     public fastTextEmbeddingProvider(IServiceProvider services)
     {
@@ -65,5 +60,18 @@ public class fastTextEmbeddingProvider : ITextEmbedding
                 _fastText.LoadModel(settings.ModelPath);
             }
         }
+    }
+
+    public void SetModelName(string model) { }
+
+    public void SetDimension(int dimension)
+    {
+        LoadModel();
+        _dimension = _fastText.GetModelDimension();
+    }
+
+    public int GetDimension()
+    {
+        return _dimension;
     }
 }

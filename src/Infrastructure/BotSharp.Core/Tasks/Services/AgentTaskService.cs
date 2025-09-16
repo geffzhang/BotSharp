@@ -1,5 +1,3 @@
-using BotSharp.Abstraction.Repositories;
-using BotSharp.Abstraction.Repositories.Filters;
 using BotSharp.Abstraction.Tasks;
 using BotSharp.Abstraction.Tasks.Models;
 
@@ -20,9 +18,30 @@ public class AgentTaskService : IAgentTaskService
     /// <returns></returns>
     public async Task<PagedItems<AgentTask>> GetTasks(AgentTaskFilter filter)
     {
-        var db = _services.GetRequiredService<IBotSharpRepository>();
-        var pagedTasks = db.GetAgentTasks(filter);
-        return await Task.FromResult(pagedTasks);
+        if (filter.Status == TaskStatus.Scheduled)
+        {
+            var taskFeeders = _services.GetServices<ITaskFeeder>();
+            var items = new List<AgentTask>();
+
+            foreach (var feeder in taskFeeders)
+            {
+                var tasks = await feeder.GetTasks();
+                items.AddRange(tasks);
+            }
+
+            return new PagedItems<AgentTask>
+            {
+                Items = items.OrderByDescending(x => x.UpdatedTime)
+                            .Skip(filter.Pager.Offset).Take(filter.Pager.Size),
+                Count = items.Count()
+            };
+        }
+        else
+        {
+            var db = _services.GetRequiredService<IBotSharpRepository>();
+            var pagedTasks = await db.GetAgentTasks(filter);
+            return await Task.FromResult(pagedTasks);
+        }
     }
 
     /// <summary>
@@ -72,7 +91,7 @@ public class AgentTaskService : IAgentTaskService
     public async Task<bool> DeleteTask(string agentId, string taskId)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var isDeleted = db.DeleteAgentTask(agentId, taskId);
+        var isDeleted = db.DeleteAgentTask(agentId, new List<string> { taskId });
         return await Task.FromResult(isDeleted);
     }
 }

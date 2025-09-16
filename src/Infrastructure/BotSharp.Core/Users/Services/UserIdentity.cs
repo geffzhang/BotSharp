@@ -40,7 +40,7 @@ public class UserIdentity : IUserIdentity
     }
 
     [JsonPropertyName("last_name")]
-    public string LastName 
+    public string LastName
         => _claims?.FirstOrDefault(x => x.Type == ClaimTypes.Surname)?.Value!;
 
     [JsonPropertyName("full_name")]
@@ -56,4 +56,29 @@ public class UserIdentity : IUserIdentity
             return $"{FirstName} {LastName}".Trim();
         }
     }
+
+    [JsonPropertyName("user_language")]
+    public string UserLanguage
+    {
+        get
+        {
+            _contextAccessor.HttpContext.Request.Headers.TryGetValue("User-Language", out var languages);
+            return languages.FirstOrDefault() ?? "en-US";
+        }
+    }
+
+    [JsonPropertyName("phone")]
+    public string? Phone => _claims?.FirstOrDefault(x => x.Type == "phone")?.Value;
+
+    [JsonPropertyName("type")]
+    public string? Type => _claims?.FirstOrDefault(x => x.Type == "type")?.Value;
+
+    [JsonPropertyName("role")]
+    public string? Role => _claims?.FirstOrDefault(x => x.Type == ClaimTypes.Role)?.Value;
+
+    /// <summary>
+    /// US, CA, etc.
+    /// </summary>
+    [JsonPropertyName("region_code")]
+    public string? RegionCode => _claims?.FirstOrDefault(x => x.Type == "region_code")?.Value;
 }

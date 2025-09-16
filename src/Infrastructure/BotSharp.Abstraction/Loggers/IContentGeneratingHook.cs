@@ -1,9 +1,12 @@
+using BotSharp.Abstraction.Functions.Models;
+using BotSharp.Abstraction.Hooks;
+
 namespace BotSharp.Abstraction.Loggers;
 
 /// <summary>
 /// Model content generating hook, it can be used for logging, metrics and tracing.
 /// </summary>
-public interface IContentGeneratingHook
+public interface IContentGeneratingHook : IHookBase
 {
     /// <summary>
     /// Before content generating.
@@ -28,4 +31,22 @@ public interface IContentGeneratingHook
     /// </summary>
     /// <returns></returns>
     Task AfterGenerated(RoleDialogModel message, TokenStatsModel tokenStats) => Task.CompletedTask;
+
+    /// <summary>
+    /// Rdndering template
+    /// </summary>
+    /// <param name="agent"></param>
+    /// <param name="name"></param>
+    /// <param name="content"></param>
+    /// <returns></returns>
+    Task OnRenderingTemplate(Agent agent, string name, string content) => Task.CompletedTask;
+
+    /// <summary>
+    /// Realtime session updated
+    /// </summary>
+    /// <param name="agent"></param>
+    /// <param name="instruction"></param>
+    /// <param name="functions"></param>
+    /// <returns></returns>
+    Task OnSessionUpdated(Agent agent, string instruction, FunctionDef[] functions, bool isInit = false) => Task.CompletedTask;
 }

@@ -1,15 +1,18 @@
-using BotSharp.Abstraction.Repositories.Filters;
 using BotSharp.Abstraction.Tasks.Models;
 using System.IO;
-using System.Threading.Tasks;
 
 namespace BotSharp.Core.Repository;
 
 public partial class FileRepository
 {
     #region Task
-    public PagedItems<AgentTask> GetAgentTasks(AgentTaskFilter filter)
+    public async ValueTask<PagedItems<AgentTask>> GetAgentTasks(AgentTaskFilter filter)
     {
+        if (filter == null)
+        {
+            filter = AgentTaskFilter.Empty();
+        }
+
         var tasks = new List<AgentTask>();
         var pager = filter.Pager ?? new Pagination();
         var skipCount = 0;
@@ -22,7 +25,7 @@ public partial class FileRepository
 
         foreach (var agentDir in Directory.GetDirectories(dir))
         {
-            var taskDir = Path.Combine(agentDir, "tasks");
+            var taskDir = Path.Combine(agentDir, AGENT_TASKS_FOLDER);
             if (!Directory.Exists(taskDir)) continue;
 
             var agentId = agentDir.Split(Path.DirectorySeparatorChar).Last();
@@ -45,6 +48,11 @@ public partial class FileRepository
                 if (filter?.Enabled != null)
                 {
                     matched = matched && task.Enabled == filter.Enabled;
+                }
+
+                if (!string.IsNullOrEmpty(filter?.Status))
+                {
+                    matched = matched && task.Status == filter.Status;
                 }
 
                 if (!matched) continue;
@@ -86,7 +94,7 @@ public partial class FileRepository
         var agentDir = Path.Combine(_dbSettings.FileRepository, _agentSettings.DataDir, agentId);
         if (!Directory.Exists(agentDir)) return null;
 
-        var taskDir = Path.Combine(agentDir, "tasks");
+        var taskDir = Path.Combine(agentDir, AGENT_TASKS_FOLDER);
         if (!Directory.Exists(taskDir)) return null;
 
         var taskFile = FindTaskFileById(taskDir, taskId);
@@ -108,7 +116,7 @@ public partial class FileRepository
         var agentDir = Path.Combine(_dbSettings.FileRepository, _agentSettings.DataDir, task.AgentId);
         if (!Directory.Exists(agentDir)) return;
 
-        var taskDir = Path.Combine(agentDir, "tasks");
+        var taskDir = Path.Combine(agentDir, AGENT_TASKS_FOLDER);
         if (!Directory.Exists(taskDir))
         {
             Directory.CreateDirectory(taskDir);
@@ -116,14 +124,13 @@ public partial class FileRepository
 
         var fileName = $"{Guid.NewGuid()}.liquid";
         var taskFile = Path.Combine(taskDir, fileName);
-        var metaData = new AgentTaskMetaData
+        var metaData = new AgentTask
         {
             Name = task.Name,
             Description = task.Description,
             Enabled = task.Enabled,
-            DirectAgentId = task.DirectAgentId,
-            CreatedDateTime = DateTime.UtcNow,
-            UpdatedDateTime = DateTime.UtcNow
+            CreatedTime = DateTime.UtcNow,
+            UpdatedTime = DateTime.UtcNow
         };
 
         var fileContent = BuildAgentTaskFileContent(metaData, task.Content);
@@ -142,7 +149,7 @@ public partial class FileRepository
         var agentDir = Path.Combine(_dbSettings.FileRepository, _agentSettings.DataDir, task.AgentId);
         if (!Directory.Exists(agentDir)) return;
 
-        var taskDir = Path.Combine(agentDir, "tasks");
+        var taskDir = Path.Combine(agentDir, AGENT_TASKS_FOLDER);
         if (!Directory.Exists(taskDir)) return;
 
         var taskFile = FindTaskFileById(taskDir, task.Id);
@@ -151,14 +158,13 @@ public partial class FileRepository
         var parsedTask = ParseAgentTask(taskFile);
         if (parsedTask == null) return;
 
-        var metaData = new AgentTaskMetaData
+        var metaData = new AgentTask
         {
             Name = parsedTask.Name,
             Description = parsedTask.Description,
             Enabled = parsedTask.Enabled,
-            DirectAgentId = parsedTask.DirectAgentId,
-            CreatedDateTime = parsedTask.CreatedDateTime,
-            UpdatedDateTime = DateTime.UtcNow
+            CreatedTime = parsedTask.CreatedTime,
+            UpdatedTime = DateTime.UtcNow
         };
         var content = parsedTask.Content;
 
@@ -173,9 +179,6 @@ public partial class FileRepository
             case AgentTaskField.Enabled:
                 metaData.Enabled = task.Enabled;
                 break;
-            case AgentTaskField.DirectAgentId:
-                metaData.DirectAgentId = task.DirectAgentId;
-                break;
             case AgentTaskField.Content:
                 content = task.Content;
                 break;
@@ -183,7 +186,6 @@ public partial class FileRepository
                 metaData.Name = task.Name;
                 metaData.Description = task.Description;
                 metaData.Enabled = task.Enabled;
-                metaData.DirectAgentId = task.DirectAgentId;
                 content = task.Content;
                 break;
         }
@@ -192,19 +194,25 @@ public partial class FileRepository
         File.WriteAllText(taskFile, fileContent);
     }
 
-    public bool DeleteAgentTask(string agentId, string taskId)
+    public bool DeleteAgentTask(string agentId, List<string> taskIds)
     {
         var agentDir = Path.Combine(_dbSettings.FileRepository, _agentSettings.DataDir, agentId);
-        if (!Directory.Exists(agentDir)) return false;
+        if (!Directory.Exists(agentDir) || taskIds.IsNullOrEmpty()) return false;
 
-        var taskDir = Path.Combine(agentDir, "tasks");
+        var taskDir = Path.Combine(agentDir, AGENT_TASKS_FOLDER);
         if (!Directory.Exists(taskDir)) return false;
 
-        var taskFile = FindTaskFileById(taskDir, taskId);
-        if (string.IsNullOrWhiteSpace(taskFile)) return false;
+        var deletedTasks = new List<string>();
+        foreach (var taskId in taskIds)
+        {
+            var taskFile = FindTaskFileById(taskDir, taskId);
+            if (string.IsNullOrWhiteSpace(taskFile)) continue;
 
-        File.Delete(taskFile);
-        return true;
+            File.Delete(taskFile);
+            deletedTasks.Add(taskId);
+        }
+        
+        return deletedTasks.Any();
     }
 
     public bool DeleteAgentTasks()
@@ -226,7 +234,7 @@ public partial class FileRepository
         return taskFile;
     }
 
-    private string BuildAgentTaskFileContent(AgentTaskMetaData metaData, string taskContent)
+    private string BuildAgentTaskFileContent(AgentTask metaData, string taskContent)
     {
         return $"{AGENT_TASK_PREFIX}\n{JsonSerializer.Serialize(metaData, _options)}\n{AGENT_TASK_SUFFIX}\n\n{taskContent}";
     }

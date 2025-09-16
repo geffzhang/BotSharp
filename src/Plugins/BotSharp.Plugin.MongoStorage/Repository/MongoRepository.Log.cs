@@ -1,37 +1,12 @@
 using BotSharp.Abstraction.Loggers.Models;
-using BotSharp.Plugin.MongoStorage.Collections;
-using BotSharp.Plugin.MongoStorage.Models;
+using BotSharp.Abstraction.Repositories.Filters;
+using MongoDB.Driver;
+using System.Text.Json;
 
 namespace BotSharp.Plugin.MongoStorage.Repository;
 
 public partial class MongoRepository
 {
-    #region Execution Log
-    public void AddExecutionLogs(string conversationId, List<string> logs)
-    {
-        if (string.IsNullOrEmpty(conversationId) || logs.IsNullOrEmpty()) return;
-
-        var filter = Builders<ExecutionLogDocument>.Filter.Eq(x => x.ConversationId, conversationId);
-        var update = Builders<ExecutionLogDocument>.Update
-                                                   .SetOnInsert(x => x.Id, Guid.NewGuid().ToString())
-                                                   .PushEach(x => x.Logs, logs);
-
-        _dc.ExectionLogs.UpdateOne(filter, update, _options);
-    }
-
-    public List<string> GetExecutionLogs(string conversationId)
-    {
-        var logs = new List<string>();
-        if (string.IsNullOrEmpty(conversationId)) return logs;
-
-        var filter = Builders<ExecutionLogDocument>.Filter.Eq(x => x.ConversationId, conversationId);
-        var logCollection = _dc.ExectionLogs.Find(filter).FirstOrDefault();
-
-        logs = logCollection?.Logs ?? new List<string>();
-        return logs;
-    }
-    #endregion
-
     #region LLM Completion Log
     public void SaveLlmCompletionLog(LlmCompletionLog log)
     {
@@ -40,21 +15,17 @@ public partial class MongoRepository
         var conversationId = log.ConversationId.IfNullOrEmptyAs(Guid.NewGuid().ToString());
         var messageId = log.MessageId.IfNullOrEmptyAs(Guid.NewGuid().ToString());
 
-        var logElement = new PromptLogMongoElement
+        var data = new LlmCompletionLogDocument
         {
+            Id = Guid.NewGuid().ToString(),
+            ConversationId = conversationId,
             MessageId = messageId,
             AgentId = log.AgentId,
             Prompt = log.Prompt,
             Response = log.Response,
-            CreateDateTime = log.CreateDateTime
+            CreatedTime = log.CreatedTime
         };
-
-        var filter = Builders<LlmCompletionLogDocument>.Filter.Eq(x => x.ConversationId, conversationId);
-        var update = Builders<LlmCompletionLogDocument>.Update
-                                                       .SetOnInsert(x => x.Id, Guid.NewGuid().ToString())
-                                                       .Push(x => x.Logs, logElement);
-
-        _dc.LlmCompletionLogs.UpdateOne(filter, update, _options);
+        _dc.LlmCompletionLogs.InsertOne(data);
     }
 
     #endregion
@@ -64,43 +35,55 @@ public partial class MongoRepository
     {
         if (log == null) return;
 
-        var conversationId = log.ConversationId.IfNullOrEmptyAs(Guid.NewGuid().ToString());
-        var messageId = log.MessageId.IfNullOrEmptyAs(Guid.NewGuid().ToString());
+        var filter = Builders<ConversationDocument>.Filter.Eq(x => x.Id, log.ConversationId);
+        var found = _dc.Conversations.Find(filter).FirstOrDefault();
+        if (found == null) return;
 
         var logDoc = new ConversationContentLogDocument
         {
-            ConversationId = conversationId,
-            MessageId = messageId,
+            ConversationId = log.ConversationId,
+            MessageId = log.MessageId,
             Name = log.Name,
             AgentId = log.AgentId,
             Role = log.Role,
             Source = log.Source,
             Content = log.Content,
-            CreateTime = log.CreateTime
+            CreatedTime = log.CreatedTime
         };
 
         _dc.ContentLogs.InsertOne(logDoc);
     }
 
-    public List<ContentLogOutputModel> GetConversationContentLogs(string conversationId)
+    public DateTimePagination<ContentLogOutputModel> GetConversationContentLogs(string conversationId, ConversationLogFilter filter)
     {
-        var logs = _dc.ContentLogs
-                      .AsQueryable()
-                      .Where(x => x.ConversationId == conversationId)
-                      .Select(x => new ContentLogOutputModel
-                      {
-                          ConversationId = x.ConversationId,
-                          MessageId = x.MessageId,
-                          Name = x.Name,
-                          AgentId = x.AgentId,
-                          Role = x.Role,
-                          Source = x.Source,
-                          Content = x.Content,
-                          CreateTime = x.CreateTime
-                      })
-                      .OrderBy(x => x.CreateTime)
-                      .ToList();
-        return logs;
+        var builder = Builders<ConversationContentLogDocument>.Filter;
+        var logFilters = new List<FilterDefinition<ConversationContentLogDocument>>
+        {
+            builder.Eq(x => x.ConversationId, conversationId),
+            builder.Lt(x => x.CreatedTime, filter.StartTime)
+        };
+        var logSortDef = Builders<ConversationContentLogDocument>.Sort.Descending(x => x.CreatedTime);
+
+        var docs = _dc.ContentLogs.Find(builder.And(logFilters)).Sort(logSortDef).Limit(filter.Size).ToList();
+        var logs = docs.Select(x => new ContentLogOutputModel
+        {
+            ConversationId = x.ConversationId,
+            MessageId = x.MessageId,
+            Name = x.Name,
+            AgentId = x.AgentId,
+            Role = x.Role,
+            Source = x.Source,
+            Content = x.Content,
+            CreatedTime = x.CreatedTime
+        }).ToList();
+
+        logs.Reverse();
+        return new DateTimePagination<ContentLogOutputModel>
+        {
+            Items = logs,
+            Count = logs.Count,
+            NextTime = logs.FirstOrDefault()?.CreatedTime
+        };
     }
     #endregion
 
@@ -109,35 +92,231 @@ public partial class MongoRepository
     {
         if (log == null) return;
 
-        var conversationId = log.ConversationId.IfNullOrEmptyAs(Guid.NewGuid().ToString());
-        var messageId = log.MessageId.IfNullOrEmptyAs(Guid.NewGuid().ToString());
+        var filter = Builders<ConversationDocument>.Filter.Eq(x => x.Id, log.ConversationId);
+        var found = _dc.Conversations.Find(filter).FirstOrDefault();
+        if (found == null) return;
 
         var logDoc = new ConversationStateLogDocument
         {
-            ConversationId = conversationId,
-            MessageId = messageId,
+            ConversationId = log.ConversationId,
+            AgentId= log.AgentId,
+            MessageId = log.MessageId,
             States = log.States,
-            CreateTime = log.CreateTime
+            CreatedTime = log.CreatedTime
         };
 
         _dc.StateLogs.InsertOne(logDoc);
     }
 
-    public List<ConversationStateLogModel> GetConversationStateLogs(string conversationId)
+    public DateTimePagination<ConversationStateLogModel> GetConversationStateLogs(string conversationId, ConversationLogFilter filter)
     {
-        var logs = _dc.StateLogs
-                      .AsQueryable()
-                      .Where(x => x.ConversationId == conversationId)
-                      .Select(x => new ConversationStateLogModel
-                      {
-                          ConversationId = x.ConversationId,
-                          MessageId = x.MessageId,
-                          States = x.States,
-                          CreateTime = x.CreateTime
-                      })
-                      .OrderBy(x => x.CreateTime)
-                      .ToList();
-        return logs;
+        var builder = Builders<ConversationStateLogDocument>.Filter;
+        var logFilters = new List<FilterDefinition<ConversationStateLogDocument>>
+        {
+            builder.Eq(x => x.ConversationId, conversationId),
+            builder.Lt(x => x.CreatedTime, filter.StartTime)
+        };
+        var logSortDef = Builders<ConversationStateLogDocument>.Sort.Descending(x => x.CreatedTime);
+
+        var docs = _dc.StateLogs.Find(builder.And(logFilters)).Sort(logSortDef).Limit(filter.Size).ToList();
+        var logs = docs.Select(x => new ConversationStateLogModel
+        {
+            ConversationId = x.ConversationId,
+            AgentId = x.AgentId,
+            MessageId = x.MessageId,
+            States = x.States,
+            CreatedTime = x.CreatedTime
+        }).ToList();
+
+        logs.Reverse();
+        return new DateTimePagination<ConversationStateLogModel>
+        {
+            Items = logs,
+            Count = logs.Count,
+            NextTime = logs.FirstOrDefault()?.CreatedTime
+        };
+    }
+    #endregion
+
+    #region Instruction Log
+    public bool SaveInstructionLogs(IEnumerable<InstructionLogModel> logs)
+    {
+        if (logs.IsNullOrEmpty()) return false;
+
+        var docs = new List<InstructionLogDocument>();
+        foreach (var log in logs)
+        {
+            var doc = InstructionLogDocument.ToMongoModel(log);
+            foreach (var pair in log.States)
+            {
+                try
+                {
+                    var jsonStr = JsonSerializer.Serialize(new { Data = JsonDocument.Parse(pair.Value) }, _botSharpOptions.JsonSerializerOptions);
+                    var json = BsonDocument.Parse(jsonStr);
+                    doc.States[pair.Key] = json;
+                }
+                catch
+                {
+                    var jsonStr = JsonSerializer.Serialize(new { Data = pair.Value }, _botSharpOptions.JsonSerializerOptions);
+                    var json = BsonDocument.Parse(jsonStr);
+                    doc.States[pair.Key] = json;
+                }
+            }
+            docs.Add(doc);
+        }
+
+        _dc.InstructionLogs.InsertMany(docs);
+        return true;
+    }
+
+    public async ValueTask<PagedItems<InstructionLogModel>> GetInstructionLogs(InstructLogFilter filter)
+    {
+        if (filter == null)
+        {
+            filter = InstructLogFilter.Empty();
+        }
+
+        var logBuilder = Builders<InstructionLogDocument>.Filter;
+        var logFilters = new List<FilterDefinition<InstructionLogDocument>>() { logBuilder.Empty };
+
+        // Filter logs
+        if (!filter.AgentIds.IsNullOrEmpty())
+        {
+            logFilters.Add(logBuilder.In(x => x.AgentId, filter.AgentIds));
+        }
+        if (!filter.Providers.IsNullOrEmpty())
+        {
+            logFilters.Add(logBuilder.In(x => x.Provider, filter.Providers));
+        }
+        if (!filter.Models.IsNullOrEmpty())
+        {
+            logFilters.Add(logBuilder.In(x => x.Model, filter.Models));
+        }
+        if (!filter.TemplateNames.IsNullOrEmpty())
+        {
+            logFilters.Add(logBuilder.In(x => x.TemplateName, filter.TemplateNames));
+        }
+        if (filter.StartTime.HasValue)
+        {
+            logFilters.Add(logBuilder.Gte(x => x.CreatedTime, filter.StartTime.Value));
+        }
+        if (filter.EndTime.HasValue)
+        {
+            logFilters.Add(logBuilder.Lte(x => x.CreatedTime, filter.EndTime.Value));
+        }
+
+        // Filter states
+        if (filter != null && !filter.States.IsNullOrEmpty())
+        {
+            foreach (var pair in filter.States)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key)) continue;
+
+                // Format key
+                var keys = pair.Key.Split(".").ToList();
+                keys.Insert(1, "data");
+                keys.Insert(0, "States");
+                var formattedKey = string.Join(".", keys);
+
+                if (string.IsNullOrWhiteSpace(pair.Value))
+                {
+                    logFilters.Add(logBuilder.Exists(formattedKey));
+                }
+                else if (bool.TryParse(pair.Value, out var boolValue))
+                {
+                    logFilters.Add(logBuilder.Eq(formattedKey, boolValue));
+                }
+                else if (int.TryParse(pair.Value, out var intValue))
+                {
+                    logFilters.Add(logBuilder.Eq(formattedKey, intValue));
+                }
+                else if (decimal.TryParse(pair.Value, out var decimalValue))
+                {
+                    logFilters.Add(logBuilder.Eq(formattedKey, decimalValue));
+                }
+                else if (float.TryParse(pair.Value, out var floatValue))
+                {
+                    logFilters.Add(logBuilder.Eq(formattedKey, floatValue));
+                }
+                else if (double.TryParse(pair.Value, out var doubleValue))
+                {
+                    logFilters.Add(logBuilder.Eq(formattedKey, doubleValue));
+                }
+                else
+                {
+                    logFilters.Add(logBuilder.Eq(formattedKey, pair.Value));
+                }
+            }
+        }
+
+        var filterDef = logBuilder.And(logFilters);
+        var sortDef = Builders<InstructionLogDocument>.Sort.Descending(x => x.CreatedTime);
+
+        var docsTask = _dc.InstructionLogs.FindAsync(filterDef, options: new()
+        {
+            Sort = sortDef,
+            Skip = filter.Offset,
+            Limit = filter.Size
+        });
+        var countTask = _dc.InstructionLogs.CountDocumentsAsync(filterDef);
+        await Task.WhenAll([docsTask, countTask]);
+
+        var docs = docsTask.Result.ToList();
+        var count = countTask.Result;
+
+        var logs = docs.Select(x =>
+        {
+            var log = InstructionLogDocument.ToDomainModel(x);
+            log.States = x.States.ToDictionary(p => p.Key, p =>
+            {
+                var jsonStr = p.Value.ToJson();
+                var jsonDoc = JsonDocument.Parse(jsonStr);
+                var data = jsonDoc.RootElement.GetProperty("data");
+                return data.ValueKind != JsonValueKind.Null ? data.ToString() : null;
+            });
+            return log;
+        }).ToList();
+
+        return new PagedItems<InstructionLogModel>
+        {
+            Items = logs,
+            Count = count
+        };
+    }
+
+    public List<string> GetInstructionLogSearchKeys(InstructLogKeysFilter filter)
+    {
+        var builder = Builders<InstructionLogDocument>.Filter;
+        var sortDef = Builders<InstructionLogDocument>.Sort.Descending(x => x.CreatedTime);
+        var filters = new List<FilterDefinition<InstructionLogDocument>>()
+        {
+            builder.Exists(x => x.States),
+            builder.Ne(x => x.States, [])
+        };
+
+        if (!filter.AgentIds.IsNullOrEmpty())
+        {
+            filters.Add(builder.In(x => x.AgentId, filter.AgentIds));
+        }
+        if (!filter.UserIds.IsNullOrEmpty())
+        {
+            filters.Add(builder.In(x => x.UserId, filter.UserIds));
+        }
+        if (filter.StartTime.HasValue)
+        {
+            filters.Add(builder.Gte(x => x.CreatedTime, filter.StartTime.Value));
+        }
+        if (filter.EndTime.HasValue)
+        {
+            filters.Add(builder.Lte(x => x.CreatedTime, filter.EndTime.Value));
+        }
+
+        var convDocs = _dc.InstructionLogs.Find(builder.And(filters))
+                                          .Sort(sortDef)
+                                          .Limit(filter.LogLimit)
+                                          .ToList();
+        var keys = convDocs.SelectMany(x => x.States.Select(x => x.Key)).Distinct().ToList();
+        return keys;
     }
     #endregion
 }

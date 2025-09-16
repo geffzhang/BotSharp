@@ -1,23 +1,63 @@
-
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver
 {
-    public async Task<bool> ScrollPageAsync(BrowserActionParams actionParams)
+    public async Task<BrowserActionResult> ScrollPage(MessageInfo message, PageActionArgs args)
     {
-        await _instance.Wait(actionParams.ConversationId);
+        var result = new BrowserActionResult();
+        var waitTime = args.WaitTime > 0 ? args.WaitTime : 10;
+        await _instance.Wait(message.ContextId, waitTime, args.WaitForNetworkIdle);
 
-        var page = _instance.GetPage(actionParams.ConversationId);
+        var page = _instance.GetPage(message.ContextId);
 
-        if(actionParams.Context.Direction == "down")
-            await page.EvaluateAsync("window.scrollBy(0, window.innerHeight - 200)");
-        else if (actionParams.Context.Direction == "up")
-            await page.EvaluateAsync("window.scrollBy(0, -window.innerHeight + 200)");
-        else if (actionParams.Context.Direction == "left")
-            await page.EvaluateAsync("window.scrollBy(-400, 0)");
-        else if (actionParams.Context.Direction == "right")
-            await page.EvaluateAsync("window.scrollBy(400, 0)");
+        if (args.Direction == "down")
+        {
+            // Get the total page height
+            int scrollY = await page.EvaluateAsync<int>("window.screen.height");
 
-        return true;
+            // Scroll a page down
+            await page.Mouse.WheelAsync(0, scrollY);
+        }
+        else if (args.Direction == "up")
+        {
+            // Get the total page height
+            int scrollY = await page.EvaluateAsync<int>("window.screen.height");
+
+            // Scroll a page up
+            await page.Mouse.WheelAsync(0, -scrollY);
+        }
+        else if (args.Direction == "bottom")
+        {
+            // Get the total page height
+            int scrollY = await page.EvaluateAsync<int>("document.body.scrollHeight");
+
+            // Scroll to the bottom
+            await page.Mouse.WheelAsync(0, scrollY);
+        }
+        else if (args.Direction == "top")
+        {
+            // Get the total page height
+            int scrollY = await page.EvaluateAsync<int>("document.body.scrollHeight");
+
+            // Scroll to the top
+            await page.Mouse.WheelAsync(0, -scrollY);
+        }
+        else if (args.Direction == "left")
+        {
+            await page.EvaluateAsync(@"
+                var scrollingElement = (document.scrollingElement || document.body);
+                scrollingElement.scrollLeft = 0;
+            ");
+        }
+        else if (args.Direction == "right")
+        {
+            await page.EvaluateAsync(@"
+                var scrollingElement = (document.scrollingElement || document.body);
+                scrollingElement.scrollLeft = scrollingElement.scrollWidth;
+            ");
+        }
+
+        result.IsSuccess = true;
+        return result;
     }
 }

@@ -1,15 +1,14 @@
-using Microsoft.Extensions.Logging;
-
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver
 {
-    public async Task<bool> ChangeListValue(BrowserActionParams actionParams)
+    public async Task<BrowserActionResult> ChangeListValue(BrowserActionParams actionParams)
     {
-        await _instance.Wait(actionParams.ConversationId);
+        var result = new BrowserActionResult();
+        await _instance.Wait(actionParams.ContextId);
 
         // Retrieve the page raw html and infer the element path
-        var body = await _instance.GetPage(actionParams.ConversationId).QuerySelectorAsync("body");
+        var body = await _instance.GetPage(actionParams.ContextId).QuerySelectorAsync("body");
 
         var str = new List<string>();
         var inputs = await body.QuerySelectorAllAsync("select");
@@ -62,7 +61,7 @@ public partial class PlaywrightWebDriver
             string.Join("", str),
             actionParams.Context.ElementName,
             actionParams.MessageId);
-        ILocator element = Locator(actionParams.ConversationId, htmlElementContextOut);
+        ILocator? element = Locator(actionParams.ContextId, htmlElementContextOut);
         
         try
         {
@@ -71,11 +70,11 @@ public partial class PlaywrightWebDriver
             if (!isVisible)
             {
                 // Select the element you want to make visible (replace with your own selector)
-                var control = await _instance.GetPage(actionParams.ConversationId)
+                var control = await _instance.GetPage(actionParams.ContextId)
                     .QuerySelectorAsync($"#{htmlElementContextOut.ElementId}");
 
                 // Show the element by modifying its CSS styles
-                await _instance.GetPage(actionParams.ConversationId)
+                await _instance.GetPage(actionParams.ContextId)
                     .EvaluateAsync(@"(element) => {
                         element.style.display = 'block';
                         element.style.visibility = 'visible';
@@ -93,22 +92,25 @@ public partial class PlaywrightWebDriver
             if (!isVisible)
             {
                 // Select the element you want to make visible (replace with your own selector)
-                var control = await _instance.GetPage(actionParams.ConversationId)
+                var control = await _instance.GetPage(actionParams.ContextId)
                     .QuerySelectorAsync($"#{htmlElementContextOut.ElementId}");
 
                 // Show the element by modifying its CSS styles
-                await _instance.GetPage(actionParams.ConversationId).EvaluateAsync(@"(element) => {
+                await _instance.GetPage(actionParams.ContextId).EvaluateAsync(@"(element) => {
                     element.style.display = 'none';
                     element.style.visibility = 'hidden';
                 }", control);
             }
-            return true;
+
+            result.IsSuccess = true;
         }
         catch (Exception ex)
         {
+            result.Message = ex.Message;
+            result.StackTrace = ex.StackTrace;
             _logger.LogError(ex.Message);
         }
 
-        return false;
+        return result;
     }
 }

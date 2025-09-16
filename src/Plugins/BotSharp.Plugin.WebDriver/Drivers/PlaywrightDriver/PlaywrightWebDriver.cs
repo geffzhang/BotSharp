@@ -1,35 +1,38 @@
-using Microsoft.Extensions.Logging;
+
+using BotSharp.Abstraction.Browsing.Settings;
 
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver : IWebBrowser
 {
-    private readonly IServiceProvider _services;
+    private IServiceProvider _services => _instance.Services;
     private readonly PlaywrightInstance _instance;
     private readonly ILogger _logger;
+    private readonly WebBrowsingSettings _webBrowsingSettings;
     public PlaywrightInstance Instance => _instance;
 
     public Agent Agent => _agent;
     private Agent _agent;
 
-    public PlaywrightWebDriver(IServiceProvider services, PlaywrightInstance instance, ILogger<PlaywrightWebDriver> logger)
+    public PlaywrightWebDriver(IServiceProvider services, PlaywrightInstance instance, ILogger<PlaywrightWebDriver> logger, WebBrowsingSettings webBrowsingSettings)
     {
-        _services = services;
         _instance = instance;
         _logger = logger;
-    }
+        _instance.SetServiceProvider(services);
+        _webBrowsingSettings = webBrowsingSettings;
+     }
 
     public void SetAgent(Agent agent)
     {
         _agent = agent;
     }
 
-    private ILocator? Locator(string conversationId, HtmlElementContextOut context)
+    private ILocator? Locator(string contextId, HtmlElementContextOut context)
     {
         ILocator element = default;
         if (!string.IsNullOrEmpty(context.ElementId))
         {
-            element = _instance.GetPage(conversationId).Locator($"#{context.ElementId}");
+            element = _instance.GetPage(contextId).Locator($"#{context.ElementId}");
         }
         else if (!string.IsNullOrEmpty(context.ElementName))
         {
@@ -40,7 +43,7 @@ public partial class PlaywrightWebDriver : IWebBrowser
                 "button" => AriaRole.Button,
                 _ => AriaRole.Generic
             };
-            element = _instance.GetPage(conversationId).Locator($"[name='{context.ElementName}']");
+            element = _instance.GetPage(contextId).Locator($"[name='{context.ElementName}']");
             var count = element.CountAsync().Result;
             if (count == 0)
             {
@@ -60,9 +63,28 @@ public partial class PlaywrightWebDriver : IWebBrowser
                 _logger.LogError($"Can't locate the web element {context.Index}.");
                 return null;
             }
-            element = _instance.GetPage(conversationId).Locator(context.TagName).Nth(context.Index);
+            element = _instance.GetPage(contextId).Locator(context.TagName).Nth(context.Index);
         }
 
         return element;
+    }
+
+    public void SetServiceProvider(IServiceProvider services)
+    {
+        _instance.SetServiceProvider(services);
+    }
+
+    public async Task PressKey(MessageInfo message, string key)
+    {
+        var page = _instance.GetPage(message.ContextId);
+        if (page != null)
+        {
+            await page.Keyboard.PressAsync(key);
+        }
+    }
+
+    public async Task<bool> IsBrowserClosed(string contextId)
+    {
+        return !_instance.Contexts.ContainsKey(contextId);
     }
 }

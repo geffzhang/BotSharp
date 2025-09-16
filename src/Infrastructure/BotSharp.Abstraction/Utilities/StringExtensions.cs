@@ -5,7 +5,7 @@ namespace BotSharp.Abstraction.Utilities;
 
 public static class StringExtensions
 {
-    public static string IfNullOrEmptyAs(this string str, string defaultValue)
+    public static string? IfNullOrEmptyAs(this string? str, string? defaultValue)
         => string.IsNullOrEmpty(str) ? defaultValue : str;
 
     public static string SubstringMax(this string str, int maxLength)
@@ -42,6 +42,13 @@ public static class StringExtensions
         if (str1 == null) return str2 == null;
 
         return str1.Equals(str2, option);
+    }
+
+    public static string CleanStr(this string? str)
+    {
+        if (string.IsNullOrWhiteSpace(str)) return string.Empty;
+
+        return str.Replace(" ", "").Replace("\t", "").Replace("\n", "").Replace("\r", "");
     }
 
     public static string JsonContent(this string text)
@@ -84,5 +91,49 @@ public static class StringExtensions
         };
 
         return JsonSerializer.Deserialize<T[]>(text, options);
+    }
+
+    public static bool IsPrimitiveValue(this string value)
+    {
+        return int.TryParse(value, out _) ||
+               long.TryParse(value, out _) ||
+               double.TryParse(value, out _) ||
+               float.TryParse(value, out _) ||
+               bool.TryParse(value, out _) ||
+               char.TryParse(value, out _) ||
+               byte.TryParse(value, out _) ||
+               sbyte.TryParse(value, out _) ||
+               short.TryParse(value, out _) ||
+               ushort.TryParse(value, out _) ||
+               uint.TryParse(value, out _) ||
+               ulong.TryParse(value, out _);
+    }
+
+
+    public static string ConvertToString<T>(this T? value, JsonSerializerOptions? jsonOptions = null)
+    {
+        if (value == null)
+        {
+            return string.Empty;
+        }
+
+        if (value is string s)
+        {
+            return s;
+        }
+
+        if (value is DateTime d)
+        { 
+            return d.ToString("o");
+        }
+
+        if (value is JsonElement elem
+            && elem.ValueKind == JsonValueKind.String)
+        {
+            return elem.ToString();
+        }
+
+        var str = JsonSerializer.Serialize(value, jsonOptions);
+        return str;
     }
 }

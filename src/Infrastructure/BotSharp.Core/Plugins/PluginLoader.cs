@@ -1,37 +1,26 @@
 using BotSharp.Abstraction.Plugins.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
-using System.Drawing;
 using System.IO;
-using System.Reflection;
 using System.Xml;
-using BotSharp.Abstraction.Repositories;
+using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace BotSharp.Core.Plugins;
 
-public class PluginLoader
+public class PluginLoader(IServiceCollection services,
+    IConfiguration config,
+    PluginSettings settings)
 {
-    private readonly IServiceCollection _services;
-    private readonly IConfiguration _config;
-    private readonly PluginSettings _settings;
-    private static List<IBotSharpPlugin> _modules = new List<IBotSharpPlugin>();
-    private static List<PluginDef> _plugins = new List<PluginDef>();
-    private static string _executingDir;
-
-    public PluginLoader(IServiceCollection services,
-        IConfiguration config,
-        PluginSettings settings)
-    {
-        _services = services;
-        _config = config;
-        _settings = settings;
-    }
+    private static List<IBotSharpPlugin> _modules = [];
+    private static List<PluginDef> _plugins = [];
+    private static string _executingDir = null!;
 
     public void Load(Action<Assembly> loaded, string? plugin = null)
     {
         _executingDir = Directory.GetParent(Assembly.GetEntryAssembly().Location).FullName;
 
-        _settings.Assemblies.ToList().ForEach(assemblyName =>
+        settings.Assemblies.ToList().ForEach(assemblyName =>
         {
             if (plugin != null && plugin != assemblyName)
             {
@@ -68,7 +57,7 @@ public class PluginLoader
 
                             if (!_plugins.Any(x => x.Assembly == plugin))
                             {
-                                Console.WriteLine($"Load dependent plugin {plugin} failed by {module.Name}.", Color.Red);
+                                Console.WriteLine($"Load dependent plugin {plugin} failed by {module.Name}.");
                             }
                         }
                     }
@@ -80,14 +69,14 @@ public class PluginLoader
             }
             else
             {
-                Console.WriteLine($"Can't find assemble {assemblyPath}.", Color.Red);
+                Console.WriteLine($"Can't find assemble {assemblyPath}.");
             }
         });
     }
 
     private void InitModule(string assembly, IBotSharpPlugin module)
     {
-        module.RegisterDI(_services, _config);
+        module.RegisterDI(services, config);
         // string classSummary = GetSummaryComment(module.GetType());
         var name = string.IsNullOrEmpty(module.Name) ? module.GetType().Name : module.Name;
         _modules.Add(module);
@@ -102,7 +91,7 @@ public class PluginLoader
             AgentIds = module.AgentIds
         });
         Console.Write($"Loaded plugin ");
-        Console.Write(name, Color.Green);
+        Console.Write(name);
         Console.WriteLine($" from {assembly}.");
         if (!string.IsNullOrEmpty(module.Description))
         {
@@ -127,6 +116,18 @@ public class PluginLoader
         var plugins = GetPlugins(services);
         var pager = filter?.Pager ?? new Pagination();
 
+        // Apply filter
+        if (!filter.Names.IsNullOrEmpty())
+        {
+            plugins = plugins.Where(x => filter.Names.Any(n => x.Name.IsEqualTo(n))).ToList();
+        }
+
+        if (!string.IsNullOrEmpty(filter.SimilarName))
+        {
+            var regex = new Regex(filter.SimilarName, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            plugins = plugins.Where(x => regex.IsMatch(x.Name)).ToList();
+        }
+
         return new PagedItems<PluginDef>
         {
             Items = plugins.Skip(pager.Offset).Take(pager.Size),
@@ -144,15 +145,19 @@ public class PluginLoader
         var config = db.GetPluginConfig();
         if (enable)
         {
-            if (!config.EnabledPlugins.Exists(x => x == id))
+            var dependentPlugins = new HashSet<string>();
+            var dependentAgentIds = new HashSet<string>();
+            FindPluginDependency(id, enable, ref dependentPlugins, ref dependentAgentIds);
+            var missingPlugins = dependentPlugins.Where(x => !config.EnabledPlugins.Contains(x)).ToList();
+            if (!missingPlugins.IsNullOrEmpty())
             {
-                config.EnabledPlugins.Add(id);
+                config.EnabledPlugins.AddRange(missingPlugins);
                 db.SavePluginConfig(config);
             }
 
             // enable agents
             var agentService = services.GetRequiredService<IAgentService>();
-            foreach (var agentId in plugin.AgentIds) 
+            foreach (var agentId in dependentAgentIds) 
             {
                 var agent = agentService.LoadAgent(agentId).Result;
                 agent.Disabled = false;
@@ -179,11 +184,51 @@ public class PluginLoader
             foreach (var agentId in plugin.AgentIds)
             {
                 var agent = agentService.LoadAgent(agentId).Result;
-                agent.Disabled = true;
-                agentService.UpdateAgent(agent, AgentField.Disabled);
+                if (agent != null)
+                {
+                    agent.Disabled = true;
+                    agentService.UpdateAgent(agent, AgentField.Disabled);
+                }
             }
         }
         return plugin;
+    }
+
+    private void FindPluginDependency(string pluginId, bool enabled, ref HashSet<string> dependentPlugins, ref HashSet<string> dependentAgentIds)
+    {
+        var pluginDef = _plugins.FirstOrDefault(x => x.Id == pluginId);
+        if (pluginDef == null) return;
+
+        if (!pluginDef.IsCore)
+        {
+            pluginDef.Enabled = enabled;
+            dependentPlugins.Add(pluginId);
+            if (!pluginDef.AgentIds.IsNullOrEmpty())
+            {
+                foreach (var agentId in pluginDef.AgentIds)
+                {
+                    dependentAgentIds.Add(agentId);
+                }
+            }
+        }
+
+        var foundPlugin = _modules.FirstOrDefault(x => x.Id == pluginId);
+        if (foundPlugin == null) return;
+
+        var attr = foundPlugin.GetType().GetCustomAttribute<PluginDependencyAttribute>();
+        if (attr != null && !attr.PluginNames.IsNullOrEmpty())
+        {
+            foreach (var name in attr.PluginNames)
+            {
+                var plugins = _plugins.Where(x => x.Assembly == name).ToList();
+                if (plugins.IsNullOrEmpty()) return;
+
+                foreach (var plugin in plugins)
+                {
+                    FindPluginDependency(plugin.Id, enabled, ref dependentPlugins, ref dependentAgentIds);
+                }
+            }
+        }
     }
 
     public string GetSummaryComment(Type member)
@@ -218,7 +263,7 @@ public class PluginLoader
     {
         if (_modules.Count == 0)
         {
-            Console.WriteLine($"No plugin loaded. Please check whether the Load() method is called.", Color.Yellow);
+            Console.WriteLine($"No plugin loaded. Please check whether the Load() method is called.");
         }
 
         _modules.ForEach(module =>
@@ -228,5 +273,21 @@ public class PluginLoader
                 (module as IBotSharpAppPlugin).Configure(app);
             }
         });
+    }
+
+    public List<PluginMenuDef> GetPluginMenuByRoles(List<PluginMenuDef> plugins, string userRole)
+    {
+        if (plugins.IsNullOrEmpty()) return plugins;
+
+        var filtered = new List<PluginMenuDef>();
+        foreach (var plugin in plugins)
+        {
+            if (plugin.Roles.IsNullOrEmpty() || plugin.Roles.Contains(userRole))
+            {
+                plugin.SubMenu = GetPluginMenuByRoles(plugin.SubMenu, userRole);
+                filtered.Add(plugin);
+            }
+        }
+        return filtered;
     }
 }

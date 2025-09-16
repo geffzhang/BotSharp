@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
+    <TargetFramework>$(TargetFramework)</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>$(LangVersion)</LangVersion>
     <VersionPrefix>$(BotSharpVersion)</VersionPrefix>
@@ -11,34 +11,103 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\agent.json" />
-    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions.json" />
-    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\instruction.liquid" />
-    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\lookup_dictionary.liquid" />
+    <Compile Remove="Helpers\**" />
+    <Compile Remove="packages\**" />
+    <EmbeddedResource Remove="Helpers\**" />
+    <EmbeddedResource Remove="packages\**" />
+    <None Remove="Helpers\**" />
+    <None Remove="packages\**" />
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\agent.json" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\execute_sql.json" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\lookup_dictionary.json" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\sql_insert.json" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\sql_select.json" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\instructions\instruction.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.dictionary.sql.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.summarize.mysql.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.summarize.redshift.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.summarize.sqlserver.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\query_result_formatting.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\render_buttons.liquid" />
+    <None Remove="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\sql_statement_correctness.liquid" />
+
+    <None Remove="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\functions\util-db-sql_table_definition.json" />
+    <None Remove="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\templates\util-db-sql_table_definition.fn.liquid" />
+    <None Remove="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\functions\util-db-verify_dictionary_term.json" />
+    <None Remove="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\templates\util-db-verify_dictionary_term.fn.liquid" />
+    <None Remove="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\templates\util-db-sql_executor.fn.liquid" />
+    <None Remove="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\functions\util-db-sql_select.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\functions\util-db-sql_table_definition.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\functions\util-db-verify_dictionary_term.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\templates\util-db-verify_dictionary_term.fn.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\sql_table_definition.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\templates\util-db-sql_table_definition.fn.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\agent.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions.json">
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\execute_sql.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\instruction.liquid">
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\instructions\instruction.liquid">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\lookup_dictionary.liquid">
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\sql_insert.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\functions\sql_select.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\functions\util-db-sql_select.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\6745151e-6d46-4a02-8de4-1c4f21c7da95\templates\util-db-sql_executor.fn.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.summarize.redshift.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.dictionary.sql.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.summarize.mysql.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\database.summarize.sqlserver.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\render_buttons.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\sql_statement_correctness.liquid">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="data\agents\beda4c12-e1ec-4b4b-b328-3df4a6687c4f\templates\query_result_formatting.liquid">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Dapper" Version="2.1.28" />
-    <PackageReference Include="MySqlConnector" Version="2.3.5" />
+    <PackageReference Include="MySqlConnector" />
+    <PackageReference Include="Npgsql" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Infrastructure\BotSharp.Abstraction\BotSharp.Abstraction.csproj" />
     <ProjectReference Include="..\..\Infrastructure\BotSharp.Core\BotSharp.Core.csproj" />
   </ItemGroup>
 

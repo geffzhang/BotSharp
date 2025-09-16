@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
+    <TargetFramework>$(TargetFramework)</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>$(LangVersion)</LangVersion>
     <VersionPrefix>$(BotSharpVersion)</VersionPrefix>
@@ -15,8 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FaissMask" Version="0.2.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Core" Version="2.2.5" />
-    <PackageReference Include="FastText.NetWrapper" Version="1.3.0" />
+    <PackageReference Include="FaissMask" />
+    <PackageReference Include="FastText.NetWrapper" />
   </ItemGroup>
 </Project>

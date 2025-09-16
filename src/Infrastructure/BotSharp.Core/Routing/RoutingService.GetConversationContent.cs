@@ -2,7 +2,7 @@ namespace BotSharp.Core.Routing;
 
 public partial class RoutingService
 {
-    public async Task<string> GetConversationContent(List<RoleDialogModel> dialogs, int maxDialogCount = 50)
+    public async Task<string> GetConversationContent(List<RoleDialogModel> dialogs, int maxDialogCount = 100)
     {
         var agentService = _services.GetRequiredService<IAgentService>();
         var conversation = "";
@@ -16,7 +16,15 @@ public partial class RoutingService
                 role = agent.Name;
             }
 
-            conversation += $"{role}: {dialog.Content}\r\n";
+            if (role == AgentRole.User)
+            {
+                conversation += $"{role}: {dialog.Payload ?? dialog.Content}\r\n";
+            }
+            else
+            {
+                // Assistant reply doesn't need help with payload
+                conversation += $"{role}: {dialog.Content}\r\n";
+            }
         }
 
         return conversation;

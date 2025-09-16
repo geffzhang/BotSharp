@@ -1,21 +1,33 @@
+using BotSharp.Abstraction.Users.Enums;
 using BotSharp.Abstraction.Users.Models;
 
 namespace BotSharp.Plugin.MongoStorage.Collections;
 
 public class UserDocument : MongoBase
 {
-    public string UserName { get; set; }
-    public string FirstName { get; set; }
-    public string LastName { get; set; }
-    public string Email { get; set; }
-    public string Salt { get; set; }
-    public string Password { get; set; }
-    public string Source { get; set; } = "internal";
+    public string UserName { get; set; } = null!;
+    public string FirstName { get; set; } = null!;
+    public string? LastName { get; set; }
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string Salt { get; set; } = null!;
+    public string Password { get; set; } = null!;
+    public string Source { get; set; } = UserSource.Internal;
     public string? ExternalId { get; set; }
-    public string Role { get; set; }
-
+    public string Type { get; set; } = UserType.Client;
+    public string Role { get; set; } = null!;
+    public string? VerificationCode { get; set; }
+    public DateTime? VerificationCodeExpireAt { get; set; }
+    public bool Verified { get; set; }
+    public string? RegionCode { get; set; }
+    public string? AffiliateId { get; set; }
+    public string? EmployeeId { get; set; }
+    public bool IsDisabled { get; set; }
+    public IEnumerable<string> Permissions { get; set; } = [];
     public DateTime CreatedTime { get; set; }
     public DateTime UpdatedTime { get; set; }
+
+    public Dashboard? Dashboard { get; set; }
 
     public User ToUser()
     {
@@ -26,11 +38,23 @@ public class UserDocument : MongoBase
             FirstName = FirstName,
             LastName = LastName,
             Email = Email,
+            Phone = Phone,
             Password = Password,
             Salt = Salt,
             Source = Source,
             ExternalId = ExternalId,
-            Role = Role
+            Type = Type,
+            Role = Role,
+            AffiliateId = AffiliateId,
+            EmployeeId = EmployeeId,
+            IsDisabled = IsDisabled,
+            VerificationCode = VerificationCode,
+            VerificationCodeExpireAt = VerificationCodeExpireAt,
+            Verified = Verified,
+            RegionCode = RegionCode,
+            Permissions = Permissions,
+            CreatedTime = CreatedTime,
+            UpdatedTime = UpdatedTime,
         };
     }
 }

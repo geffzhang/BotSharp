@@ -2,19 +2,15 @@ using BotSharp.Abstraction.Routing.Models;
 
 namespace BotSharp.Plugin.MongoStorage.Models;
 
-[BsonIgnoreExtraElements]
+[BsonIgnoreExtraElements(Inherited = true)]
 public class RoutingRuleMongoElement
 {
-    public string Field { get; set; }
-    public string Description { get; set; }
+    public string Field { get; set; } = default!;
+    public string Description { get; set; } = default!;
     public bool Required { get; set; }
     public string? RedirectTo { get; set; }
-    public string Type { get; set; }
-
-    public RoutingRuleMongoElement()
-    {
-        
-    }
+    public string Type { get; set; } = default!;
+    public string FieldType { get; set; } = default!;
 
     public static RoutingRuleMongoElement ToMongoElement(RoutingRule routingRule)
     {
@@ -25,6 +21,7 @@ public class RoutingRuleMongoElement
             Required = routingRule.Required,
             RedirectTo = routingRule.RedirectTo,
             Type = routingRule.Type,
+            FieldType = routingRule.FieldType
         };
     }
 
@@ -39,6 +36,12 @@ public class RoutingRuleMongoElement
             Required = rule.Required,
             RedirectTo = rule.RedirectTo,
             Type = rule.Type,
+            FieldType= rule.FieldType
         };
+    }
+
+    public override string ToString()
+    {
+        return $"{Field} - {FieldType}, Required: {Required} ({Type})";
     }
 }

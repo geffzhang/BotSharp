@@ -1,13 +1,13 @@
 using BotSharp.Abstraction.Functions;
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Routing.Models;
-using System.Drawing;
 
 namespace BotSharp.Core.Routing;
 
 /// <summary>
 /// Router calls this function to set the Active Agent according to the context
 /// </summary>
-public class RouteToAgentFn : IFunctionCallback
+public partial class RouteToAgentFn : IFunctionCallback
 {
     public string Name => "route_to_agent";
     private readonly IServiceProvider _services;
@@ -47,19 +47,19 @@ public class RouteToAgentFn : IFunctionCallback
             }
 
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            var filter = new AgentFilter { AgentName = args.OriginalAgent };
+            var filter = new AgentFilter { AgentNames = [args.OriginalAgent] };
             var originalAgent = db.GetAgents(filter).FirstOrDefault();
             if (originalAgent != null)
             {
-                _context.Push(originalAgent.Id, $"user goal agent{(correctToOriginalAgent ? " & is corrected" : "")}");
+                _context.Push(originalAgent.Id, $"user goal agent{(correctToOriginalAgent ? " " + originalAgent.Name + " & is corrected" : "")}");
             }
         }
 
         // Push next action agent
         if (!string.IsNullOrEmpty(args.AgentName) && args.AgentName.Length < 32)
         {
-            _context.Push(args.AgentName, args.Reason);
-            states.SetState("next_action_agent", args.AgentName, isNeedVersion: true);
+            _context.Push(args.AgentName, args.NextActionReason);
+            states.SetState(StateConst.NEXT_ACTION_AGENT, args.AgentName, isNeedVersion: true);
         }
 
         if (string.IsNullOrEmpty(args.AgentName))
@@ -69,7 +69,7 @@ public class RouteToAgentFn : IFunctionCallback
         else
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            var filter = new AgentFilter { AgentName = args.AgentName };
+            var filter = new AgentFilter { AgentNames = [args.AgentName] };
             var targetAgent = db.GetAgents(filter).FirstOrDefault();
             if (targetAgent == null)
             {
@@ -82,109 +82,19 @@ public class RouteToAgentFn : IFunctionCallback
                 return false;
             }
 
-            var missingfield = HasMissingRequiredField(message, out var agentId);
+            var routing = _services.GetRequiredService<IRoutingService>();
+            var (missingfield, reason) = routing.HasMissingRequiredField(message, out var agentId);
             if (missingfield && message.CurrentAgentId != agentId)
             {
                 // Stack redirection agent
-                _context.Push(agentId, reason: $"REDIRECTION {message.Content}");
+                _context.Push(agentId, reason: $"REDIRECTION {reason}");
+                message.Content = reason;
+                states.SetState(StateConst.AGENT_REDIRECTION_REASON, reason, isNeedVersion: false);
             }
         }
 
         message.CurrentAgentId = _context.GetCurrentAgentId();
 
         return true;
-    }
-
-    /// <summary>
-    /// If the target agent needs some required fields but the
-    /// </summary>
-    /// <returns></returns>
-    private bool HasMissingRequiredField(RoleDialogModel message, out string agentId)
-    {
-        var args = JsonSerializer.Deserialize<RoutingArgs>(message.FunctionArgs);
-        var routing = _services.GetRequiredService<IRoutingService>();
-
-        var routingRules = routing.GetRulesByAgentName(args.AgentName);
-
-        if (routingRules == null || !routingRules.Any())
-        {
-            agentId = message.CurrentAgentId;
-            return false;
-        }
-
-        agentId = routingRules.First().AgentId;
-        // Add routed agent
-        message.FunctionArgs = AppendPropertyToArgs(message.FunctionArgs, "route_to", agentId);
-
-        // Check required fields
-        var root = JsonSerializer.Deserialize<JsonElement>(message.FunctionArgs);
-        var missingFields = new List<string>();
-        foreach (var field in routingRules.Where(x => x.Required).Select(x => x.Field))
-        {
-            if (!root.EnumerateObject().Any(x => x.Name == field))
-            {
-                missingFields.Add(field);
-            }
-            else if (root.EnumerateObject().Any(x => x.Name == field) &&
-                string.IsNullOrEmpty(root.EnumerateObject().FirstOrDefault(x => x.Name == field).Value.ToString()))
-            {
-                missingFields.Add(field);
-            }
-        }
-
-        // Check if states contains the field according conversation context.
-        var states = _services.GetRequiredService<IConversationStateService>();
-        foreach (var field in missingFields.ToList())
-        {
-            if (!string.IsNullOrEmpty(states.GetState(field)))
-            {
-                var value = states.GetState(field);
-                message.FunctionArgs = AppendPropertyToArgs(message.FunctionArgs, field, value);
-                missingFields.Remove(field);
-            }
-        }
-
-        if (missingFields.Any())
-        {
-            // Add field to args
-            message.FunctionArgs = AppendPropertyToArgs(message.FunctionArgs, "missing_fields", missingFields);
-            message.Content = $"missing some information: {string.Join(", ", missingFields)}";
-
-            // Handle redirect
-            var routingRule = routingRules.FirstOrDefault(x => missingFields.Contains(x.Field));
-            if (!string.IsNullOrEmpty(routingRule.RedirectTo))
-            {
-                var db = _services.GetRequiredService<IBotSharpRepository>();
-                var record = db.GetAgent(routingRule.RedirectTo);
-
-                // Add redirected agent
-                message.FunctionArgs = AppendPropertyToArgs(message.FunctionArgs, "redirect_to", record.Name);
-                agentId = routingRule.RedirectTo;
-                var logger = _services.GetRequiredService<ILogger<RouteToAgentFn>>();
-#if DEBUG
-                Console.WriteLine($"*** Routing redirect to {record.Name.ToUpper()} ***", Color.Yellow);
-#else
-                logger.LogInformation($"*** Routing redirect to {record.Name.ToUpper()} ***");
-#endif
-            }
-            else
-            {
-                // back to router
-                agentId = message.CurrentAgentId;
-            }
-        }
-
-        return missingFields.Any();
-    }
-
-    private string AppendPropertyToArgs(string args, string key, string value)
-    {
-        return args.Substring(0, args.Length - 1) + $", \"{key}\": \"{value}\"" + "}";
-    }
-
-    private string AppendPropertyToArgs(string args, string key, IEnumerable<string> values)
-    {
-        string fields = string.Join(",", values.Select(x => $"\"{x}\""));
-        return args.Substring(0, args.Length - 1) + $", \"{key}\": [{fields}]" + "}";
     }
 }

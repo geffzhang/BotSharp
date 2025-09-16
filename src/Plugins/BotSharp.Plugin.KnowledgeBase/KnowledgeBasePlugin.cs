@@ -1,5 +1,9 @@
 using BotSharp.Abstraction.Plugins.Models;
 using BotSharp.Abstraction.Settings;
+using BotSharp.Abstraction.Users.Enums;
+using BotSharp.Plugin.KnowledgeBase.Converters;
+using BotSharp.Plugin.KnowledgeBase.Hooks;
+using BotSharp.Plugin.KnowledgeBase.Services;
 using Microsoft.Extensions.Configuration;
 
 namespace BotSharp.Plugin.KnowledgeBase;
@@ -19,17 +23,26 @@ public class KnowledgeBasePlugin : IBotSharpPlugin
             return settingService.Bind<KnowledgeBaseSettings>("KnowledgeBase");
         });
 
-        var a = config["KnowledgeBase"];
-
-        services.AddScoped<ITextChopper, TextChopperService>();
-        services.AddScoped<IKnowledgeService, KnowledgeService>();
         services.AddSingleton<IPdf2TextConverter, PigPdf2TextConverter>();
+        services.AddScoped<IAgentUtilityHook, KnowledgeBaseUtilityHook>();
+        services.AddScoped<IKnowledgeService, KnowledgeService>();
+        services.AddScoped<IKnowledgeHook, KnowledgeHook>();
+
     }
 
     public bool AttachMenu(List<PluginMenuDef> menu)
     {
         var section = menu.First(x => x.Label == "Apps");
-        menu.Add(new PluginMenuDef("Knowledge Base", link: "/page/knowledge-base", icon: "bx bx-book-open", weight: section.Weight + 1));
+        menu.Add(new PluginMenuDef("Knowledge Base", icon: "bx bx-book-open", weight: section.Weight + 1)
+        {
+            Roles = new List<string> { UserRole.Root, UserRole.Admin, UserRole.Engineer },
+            SubMenu = new List<PluginMenuDef>
+            {
+                new PluginMenuDef("Q & A", link: "page/knowledge-base/question-answer"),
+                new PluginMenuDef("Relationships", link: "page/knowledge-base/relationships"),
+                new PluginMenuDef("Documents", link: "page/knowledge-base/documents")
+            }
+        });
         return true;
     }
 }

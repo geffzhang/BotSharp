@@ -1,15 +1,13 @@
-using Microsoft.Extensions.Logging;
-using System.Text.RegularExpressions;
-
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver
 {
-    public async Task<bool> ClickElement(BrowserActionParams actionParams)
+    public async Task<BrowserActionResult> ClickElement(BrowserActionParams actionParams)
     {
-        await _instance.Wait(actionParams.ConversationId);
+        var result = new BrowserActionResult();
+        await _instance.Wait(actionParams.ContextId);
 
-        var page = _instance.GetPage(actionParams.ConversationId);
+        var page = _instance.GetPage(actionParams.ContextId);
         ILocator locator = default;
         int count = 0;
 
@@ -44,7 +42,8 @@ public partial class PlaywrightWebDriver
 
         if (count == 0)
         {
-            _logger.LogError($"Can't locate element by keyword {actionParams.Context.ElementText}");
+            result.Message = $"Can't locate element by keyword {actionParams.Context.ElementText}";
+            _logger.LogError(result.Message);
         }
         else if (count == 1)
         {
@@ -52,21 +51,22 @@ public partial class PlaywrightWebDriver
             await locator.ClickAsync();
 
             // Triggered ajax
-            await _instance.Wait(actionParams.ConversationId);
+            await _instance.Wait(actionParams.ContextId);
 
-            return true;
+            result.IsSuccess = true;
         }
         else if (count > 1)
         {
-            _logger.LogWarning($"Multiple elements are found by keyword {actionParams.Context.ElementText}");
+            result.Message = $"Multiple elements are found by keyword {actionParams.Context.ElementText}";
+            _logger.LogWarning(result.Message);
             var all = await locator.AllAsync();
             foreach (var element in all)
             {
-                var content = await element.TextContentAsync();
+                var content = await element.InnerHTMLAsync();
                 _logger.LogWarning(content);
             }
         }
 
-        return false;
+        return result;
     }
 }

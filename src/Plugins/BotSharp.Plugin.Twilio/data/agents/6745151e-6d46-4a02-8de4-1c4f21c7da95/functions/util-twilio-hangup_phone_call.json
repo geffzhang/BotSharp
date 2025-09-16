@@ -1,0 +1,19 @@
+{
+  "name": "util-twilio-hangup_phone_call",
+  "description": "Call this function if the user wants to end the phone call or conversation",
+  "visibility_expression": "{% if states.channel == 'phone' %}visible{% endif %}",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "reason": {
+        "type": "string",
+        "description": "The reason why user wants to end the phone call."
+      },
+      "response_content": {
+        "type": "string",
+        "description": "A response statement said to the user to politely and gratefully ending a conversation before hanging up."
+      }
+    },
+    "required": [ "reason", "response_content" ]
+  }
+}

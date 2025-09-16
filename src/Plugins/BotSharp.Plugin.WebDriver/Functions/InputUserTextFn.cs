@@ -29,14 +29,19 @@ public class InputUserTextFn : IFunctionCallback
             content += " and pressed Enter";
         }
 
-        message.Content = result ?
+        message.Content = result.IsSuccess ?
             content + " successfully" :
-            content + " failed";
+            content + $" failed. {result.Message}";
 
         var webDriverService = _services.GetRequiredService<WebDriverService>();
         var path = webDriverService.GetScreenshotFilePath(message.MessageId);
         
-        message.Data = await _browser.ScreenshotAsync(convService.ConversationId, path);
+        message.Data = await _browser.ScreenshotAsync(new MessageInfo
+        {
+            AgentId = message.CurrentAgentId,
+            ContextId = webDriverService.GetMessageContext(message),
+            MessageId = message.MessageId
+        }, path);
 
         return true;
     }

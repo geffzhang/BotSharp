@@ -1,0 +1,18 @@
+{
+  "name": "response_to_user",
+  "description": "Response to user without routing to any other agent, user has no specific request.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Response content"
+      },
+      "conversation_end": {
+        "type": "boolean",
+        "description": "User is ending the conversation."
+      }
+    },
+    "required": [ "content" ]
+  }
+}

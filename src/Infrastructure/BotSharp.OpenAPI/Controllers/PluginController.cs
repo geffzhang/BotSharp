@@ -1,47 +1,58 @@
+using BotSharp.Abstraction.Infrastructures.Attributes;
 using BotSharp.Abstraction.Plugins.Models;
+using BotSharp.Abstraction.Users.Enums;
 using BotSharp.Core.Plugins;
 
 namespace BotSharp.OpenAPI.Controllers;
 
 [Authorize]
 [ApiController]
-public class PluginController : ControllerBase
+public class PluginController(IServiceProvider services, IUserIdentity user, PluginSettings settings) : ControllerBase
 {
-    private readonly IServiceProvider _services;
-    private readonly PluginSettings _settings;
+    private readonly IUserIdentity _user = user;
 
-    public PluginController(IServiceProvider services, PluginSettings settings)
-    {
-        _services = services;
-        _settings = settings;
-    }
-
+    [BotSharpAuth]
     [HttpGet("/plugins")]
-    public PagedItems<PluginDef> GetPlugins([FromQuery] PluginFilter filter)
+    public async Task<PagedItems<PluginDef>> GetPlugins([FromQuery] PluginFilter filter)
     {
-        var loader = _services.GetRequiredService<PluginLoader>();
-        return loader.GetPagedPlugins(_services, filter);
+        var loader = services.GetRequiredService<PluginLoader>();
+        return loader.GetPagedPlugins(services, filter);
     }
 
     [HttpGet("/plugin/menu")]
-    public List<PluginMenuDef> GetPluginMenu()
+    public async Task<List<PluginMenuDef>> GetPluginMenu()
     {
-        var menu = new List<PluginMenuDef>
-        {
+        List<PluginMenuDef> menu =
+        [
             new PluginMenuDef("Apps", weight: 5)
             {
                 IsHeader = true,
             },
             new PluginMenuDef("System", weight: 30)
-            {
-                IsHeader = true
+            { 
+                IsHeader = true,
+                Roles = [UserRole.Root, UserRole.Admin]
             },
-            new PluginMenuDef("Plugins", link: "page/plugin", icon: "bx bx-plug", weight: 31),
-            new PluginMenuDef("Settings", link: "page/setting", icon: "bx bx-cog", weight: 32),
-        };
+            new PluginMenuDef("Plugins", link: "page/plugin", icon: "bx bx-plug", weight: 31)
+            {
+                Roles = [UserRole.Root, UserRole.Admin]
+            },
+            new PluginMenuDef("Settings", link: "page/setting", icon: "bx bx-cog", weight: 32)
+            {
+                Roles = [UserRole.Root, UserRole.Admin]
+            },
+            new PluginMenuDef("Roles", link: "page/roles", icon: "bx bx-group", weight: 33)
+            {
+                Roles = [UserRole.Root, UserRole.Admin]
+            },
+            new PluginMenuDef("Users", link: "page/users", icon: "bx bx-user", weight: 34)
+            {
+                Roles = [UserRole.Root, UserRole.Admin]
+            }
+        ];
 
-        var loader = _services.GetRequiredService<PluginLoader>();
-        foreach (var plugin in loader.GetPlugins(_services))
+        var loader = services.GetRequiredService<PluginLoader>();
+        foreach (var plugin in loader.GetPlugins(services))
         {
             if (!plugin.Enabled)
             {
@@ -49,21 +60,27 @@ public class PluginController : ControllerBase
             }
             plugin.Module.AttachMenu(menu);
         }
+
+        var userService = services.GetRequiredService<IUserService>();
+        var user = await userService.GetUser(_user.Id);
+        menu = loader.GetPluginMenuByRoles(menu, user?.Role);
         menu = menu.OrderBy(x => x.Weight).ToList();
         return menu;
     }
 
+    [BotSharpAuth]
     [HttpPost("/plugin/{id}/install")]
     public PluginDef InstallPlugin([FromRoute] string id)
     {
-        var loader = _services.GetRequiredService<PluginLoader>();
-        return loader.UpdatePluginStatus(_services, id, true);
+        var loader = services.GetRequiredService<PluginLoader>();
+        return loader.UpdatePluginStatus(services, id, true);
     }
 
+    [BotSharpAuth]
     [HttpPost("/plugin/{id}/remove")]
     public PluginDef RemovePluginStats([FromRoute] string id)
     {
-        var loader = _services.GetRequiredService<PluginLoader>();
-        return loader.UpdatePluginStatus(_services, id, false);
+        var loader = services.GetRequiredService<PluginLoader>();
+        return loader.UpdatePluginStatus(services, id, false);
     }
 }

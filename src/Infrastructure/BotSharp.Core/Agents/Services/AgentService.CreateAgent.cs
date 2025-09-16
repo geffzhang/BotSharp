@@ -1,8 +1,6 @@
-using BotSharp.Abstraction.Agents.Models;
-using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Repositories;
+using BotSharp.Abstraction.Repositories.Settings;
 using BotSharp.Abstraction.Tasks.Models;
-using BotSharp.Abstraction.Users.Models;
+using BotSharp.Abstraction.Users.Enums;
 using System.IO;
 using System.Text.RegularExpressions;
 
@@ -12,96 +10,89 @@ public partial class AgentService
 {
     public async Task<Agent> CreateAgent(Agent agent)
     {
-        var agentRecord = _db.GetAgentsByUser(_user.Id).FirstOrDefault(x => x.Name.IsEqualTo(agent.Name));
-
-        if (agentRecord != null)
+        var userIdentity = _services.GetRequiredService<IUserIdentity>();
+        var userAgents = _db.GetUserAgents(userIdentity.Id);
+        var found = userAgents?.FirstOrDefault(x => x.Agent != null && x.Agent.Name.IsEqualTo(agent.Name));
+        if (found != null)
         {
-            return agentRecord;
+            return found.Agent;
         }
 
-        agentRecord = Agent.Clone(agent);
+        var agentRecord = Agent.Clone(agent);
         agentRecord.Id = Guid.NewGuid().ToString();
         agentRecord.CreatedDateTime = DateTime.UtcNow;
         agentRecord.UpdatedDateTime = DateTime.UtcNow;
 
         var dbSettings = _services.GetRequiredService<BotSharpDatabaseSettings>();
         var agentSettings = _services.GetRequiredService<AgentSettings>();
-        var filePath = Path.Combine(dbSettings.FileRepository, agentSettings.DataDir);
-        var foundAgent = FetchAgentFileByName(agent.Name, filePath);
 
-        if (foundAgent != null)
+        var user = _db.GetUserById(userIdentity.Id);
+        var userService = _services.GetRequiredService<IUserService>();
+        var auth = await userService.GetUserAuthorizations();
+
+        _db.BulkInsertAgents(new List<Agent> { agentRecord });
+        if (auth.IsAdmin || auth.Permissions.Contains(UserPermission.CreateAgent))
         {
-            agentRecord.SetId(foundAgent.Id)
-                       .SetName(foundAgent.Name)
-                       .SetDescription(foundAgent.Description)
-                       .SetIsPublic(foundAgent.IsPublic)
-                       .SetDisabled(foundAgent.Disabled)
-                       .SetAgentType(foundAgent.Type)
-                       .SetProfiles(foundAgent.Profiles)
-                       .SetRoutingRules(foundAgent.RoutingRules)
-                       .SetInstruction(foundAgent.Instruction)
-                       .SetTemplates(foundAgent.Templates)
-                       .SetFunctions(foundAgent.Functions)
-                       .SetResponses(foundAgent.Responses)
-                       .SetLlmConfig(foundAgent.LlmConfig);
+            _db.BulkInsertUserAgents(new List<UserAgent>
+            {
+                new UserAgent
+                {
+                    UserId = user.Id,
+                    AgentId = agentRecord.Id,
+                    Actions = new List<string> { UserAction.Edit, UserAction.Train, UserAction.Evaluate, UserAction.Chat },
+                    CreatedTime = DateTime.UtcNow,
+                    UpdatedTime = DateTime.UtcNow
+                }
+            });
         }
-
-        var user = _db.GetUserById(_user.Id);
-        var userAgentRecord = new UserAgent
-        {
-            Id = Guid.NewGuid().ToString(),
-            UserId = user.Id,
-            AgentId = foundAgent?.Id ?? agentRecord.Id,
-            Editable = false,
-            CreatedTime = DateTime.UtcNow,
-            UpdatedTime = DateTime.UtcNow
-        };
-
-        _db.Transaction<IBotSharpTable>(delegate
-        {
-            _db.Add<IBotSharpTable>(agentRecord);
-            _db.Add<IBotSharpTable>(userAgentRecord);
-        });
 
         Utilities.ClearCache();
-
-        return agentRecord;
+        return await Task.FromResult(agentRecord);
     }
 
-    private Agent FetchAgentFileByName(string agentName, string filePath)
+    private (string, List<ChannelInstruction>) GetInstructionsFromFile(string fileDir)
     {
-        foreach (var dir in Directory.GetDirectories(filePath))
+        var defaultInstruction = string.Empty;
+        var channelInstructions = new List<ChannelInstruction>();
+
+        var instructionDir = Path.Combine(fileDir, "instructions");
+        if (!Directory.Exists(instructionDir))
         {
-            var agentJson = File.ReadAllText(Path.Combine(dir, "agent.json"));
-            var agent = JsonSerializer.Deserialize<Agent>(agentJson, _options);
-            if (agent != null && agent.Name.IsEqualTo(agentName))
-            {
-                var functions = FetchFunctionsFromFile(dir);
-                var instruction = FetchInstructionFromFile(dir);
-                var responses = FetchResponsesFromFile(dir);
-                var templates = FetchTemplatesFromFile(dir);
-                var samples = FetchSamplesFromFile(dir);
-                return agent.SetInstruction(instruction)
-                            .SetTemplates(templates)
-                            .SetFunctions(functions)
-                            .SetResponses(responses)
-                            .SetSamples(samples);
-            }
+            return (defaultInstruction, channelInstructions);
         }
 
-        return null;
+        foreach (var file in Directory.GetFiles(instructionDir))
+        {
+            var extension = Path.GetExtension(file).Substring(1);
+            if (!extension.IsEqualTo(_agentSettings.TemplateFormat))
+            {
+                continue;
+            }
+
+            var segments = Path.GetFileName(file).Split(".", StringSplitOptions.RemoveEmptyEntries);
+            if (segments.IsNullOrEmpty() || !segments[0].IsEqualTo("instruction"))
+            {
+                continue;
+            }
+
+            if (segments.Length == 2)
+            {
+                defaultInstruction = File.ReadAllText(file);
+            }
+            else if (segments.Length == 3)
+            {
+                var item = new ChannelInstruction
+                {
+                    Channel = segments[1],
+                    Instruction = File.ReadAllText(file)
+                };
+                channelInstructions.Add(item);
+            }
+        }
+        return (defaultInstruction, channelInstructions);
     }
 
-    private string FetchInstructionFromFile(string fileDir)
-    {
-        var file = Path.Combine(fileDir, $"instruction.{_agentSettings.TemplateFormat}");
-        if (!File.Exists(file)) return null;
-
-        var instruction = File.ReadAllText(file);
-        return instruction;
-    }
-
-    private List<AgentTemplate> FetchTemplatesFromFile(string fileDir)
+    private List<AgentTemplate> GetTemplatesFromFile(string fileDir)
     {
         var templates = new List<AgentTemplate>();
         var templateDir = Path.Combine(fileDir, "templates");
@@ -109,12 +100,10 @@ public partial class AgentService
 
         foreach (var file in Directory.GetFiles(templateDir))
         {
-            var fileName = file.Split(Path.DirectorySeparatorChar).Last();
-            var splitIdx = fileName.LastIndexOf(".");
-            var name = fileName.Substring(0, splitIdx);
-            var extension = fileName.Substring(splitIdx + 1);
+            var extension = Path.GetExtension(file).Substring(1);
             if (extension.IsEqualTo(_agentSettings.TemplateFormat))
             {
+                var name = Path.GetFileNameWithoutExtension(file);
                 var content = File.ReadAllText(file);
                 templates.Add(new AgentTemplate(name, content));
             }
@@ -123,17 +112,34 @@ public partial class AgentService
         return templates;
     }
 
-    private List<FunctionDef> FetchFunctionsFromFile(string fileDir)
+    private List<FunctionDef> GetFunctionsFromFile(string fileDir)
     {
-        var file = Path.Combine(fileDir, "functions.json");
-        if (!File.Exists(file)) return new List<FunctionDef>();
+        var functions = new List<FunctionDef>();
+        var functionDir = Path.Combine(fileDir, "functions");
 
-        var functionsJson = File.ReadAllText(file);
-        var functions = JsonSerializer.Deserialize<List<FunctionDef>>(functionsJson, _options);
+        if (!Directory.Exists(functionDir)) return functions;
+
+        foreach (var file in Directory.GetFiles(functionDir))
+        {
+            try
+            {
+                var extension = Path.GetExtension(file).Substring(1);
+                if (extension != "json") continue;
+
+                var json = File.ReadAllText(file);
+                var function = JsonSerializer.Deserialize<FunctionDef>(json, _options);
+                functions.Add(function);
+            }
+            catch
+            {
+                continue;
+            }
+
+        }
         return functions;
     }
 
-    private List<AgentResponse> FetchResponsesFromFile(string fileDir)
+    private List<AgentResponse> GetResponsesFromFile(string fileDir)
     {
         var responses = new List<AgentResponse>();
         var responseDir = Path.Combine(fileDir, "responses");
@@ -151,7 +157,7 @@ public partial class AgentService
         return responses;
     }
 
-    private List<string> FetchSamplesFromFile(string fileDir)
+    private List<string> GetSamplesFromFile(string fileDir)
     {
         var file = Path.Combine(fileDir, "samples.txt");
         if (!File.Exists(file)) return new List<string>();
@@ -160,7 +166,7 @@ public partial class AgentService
         return samples?.ToList() ?? new List<string>();
     }
 
-    private List<AgentTask> FetchTasksFromFile(string fileDir)
+    private List<AgentTask> GetTasksFromFile(string fileDir)
     {
         var tasks = new List<AgentTask>();
         var taskDir = Path.Combine(fileDir, "tasks");
@@ -178,11 +184,10 @@ public partial class AgentService
                 Name = parsedTask.Name,
                 Description = parsedTask.Description,
                 Enabled = parsedTask.Enabled,
-                DirectAgentId = parsedTask.DirectAgentId,
                 Content = parsedTask.Content,
                 AgentId = agentId,
-                CreatedDateTime = parsedTask.CreatedDateTime,
-                UpdatedDateTime = parsedTask.UpdatedDateTime
+                CreatedTime = parsedTask.CreatedTime,
+                UpdatedTime = parsedTask.UpdatedTime
             };
             tasks.Add(task);
         }
@@ -212,18 +217,5 @@ public partial class AgentService
         var content = Regex.Match(data, pattern, RegexOptions.Singleline).Value;
         task.Content = content.Substring(suffix.Length).Trim();
         return task;
-    }
-
-    private UserAgent BuildUserAgent(string agentId, string userId, bool editable = false)
-    {
-        return new UserAgent
-        {
-            Id = Guid.NewGuid().ToString(),
-            UserId = userId,
-            AgentId = agentId,
-            Editable = editable,
-            CreatedTime = DateTime.UtcNow,
-            UpdatedTime = DateTime.UtcNow
-        };
     }
 }

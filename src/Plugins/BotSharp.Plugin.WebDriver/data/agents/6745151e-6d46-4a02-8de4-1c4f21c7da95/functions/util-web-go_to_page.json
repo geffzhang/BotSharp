@@ -1,0 +1,26 @@
+{
+  "name": "util-web-go_to_page",
+  "description": "Go to web page in specific url.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Web URL"
+      },
+      "open_new_tab": {
+        "type": "boolean",
+        "description": "Open new tab"
+      },
+      "open_blank_page": {
+        "type": "boolean",
+        "description": "Open blank page"
+      },
+      "enable_response_callback": {
+        "type": "boolean",
+        "description": "Enable response callback"
+      }
+    },
+    "required": [ "url" ]
+  }
+}

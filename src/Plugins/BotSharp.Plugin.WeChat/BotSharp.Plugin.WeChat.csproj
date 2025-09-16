@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
+    <TargetFramework>$(TargetFramework)</TargetFramework>
     <LangVersion>$(LangVersion)</LangVersion>
     <VersionPrefix>$(BotSharpVersion)</VersionPrefix>
     <GeneratePackageOnBuild>$(GeneratePackageOnBuild)</GeneratePackageOnBuild>
@@ -27,8 +27,8 @@
   </ItemGroup>
   
   <ItemGroup>
-    <PackageReference Include="Senparc.Weixin.MP.Middleware" Version="1.1.1" />
-    <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+    <PackageReference Include="Senparc.Weixin.MP.Middleware" />
+    <PackageReference Include="System.Threading.Channels" />
   </ItemGroup>
 
 </Project>

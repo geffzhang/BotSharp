@@ -1,9 +1,46 @@
+using BotSharp.Abstraction.VectorStorage.Models;
+
 namespace BotSharp.Abstraction.VectorStorage;
 
 public interface IVectorDb
 {
-    Task<List<string>> GetCollections();
-    Task CreateCollection(string collectionName, int dim);
-    Task Upsert(string collectionName, int id, float[] vector, string text);
-    Task<List<string>> Search(string collectionName, float[] vector, int limit = 5);
+    string Provider { get; }
+
+    Task<bool> DoesCollectionExist(string collectionName)
+        => throw new NotImplementedException();
+    Task<IEnumerable<string>> GetCollections()
+        => throw new NotImplementedException();
+    Task<VectorCollectionDetails?> GetCollectionDetails(string collectionName)
+        => throw new NotImplementedException();
+    Task<StringIdPagedItems<VectorCollectionData>> GetPagedCollectionData(string collectionName, VectorFilter filter)
+        => throw new NotImplementedException();
+    Task<IEnumerable<VectorCollectionData>> GetCollectionData(string collectionName, IEnumerable<Guid> ids, VectorQueryOptions? options = null)
+        => throw new NotImplementedException();
+    Task<bool> CreateCollection(string collectionName, VectorCollectionCreateOptions options)
+        => throw new NotImplementedException();
+    Task<bool> DeleteCollection(string collectionName)
+        => throw new NotImplementedException();
+    Task<bool> Upsert(string collectionName, Guid id, float[] vector, string text, Dictionary<string, VectorPayloadValue>? payload = null)
+        => throw new NotImplementedException();
+    Task<IEnumerable<VectorCollectionData>> Search(string collectionName, float[] vector, VectorSearchOptions? options = null)
+        => throw new NotImplementedException();
+    Task<bool> DeleteCollectionData(string collectionName, List<Guid> ids)
+        => throw new NotImplementedException();
+    Task<bool> DeleteCollectionAllData(string collectionName)
+        => throw new NotImplementedException();
+    Task<IEnumerable<VectorCollectionSnapshot>> GetCollectionSnapshots(string collectionName)
+        => throw new NotImplementedException();
+    Task<VectorCollectionSnapshot?> CreateCollectionShapshot(string collectionName)
+        => throw new NotImplementedException();
+    Task<BinaryData> DownloadCollectionSnapshot(string collectionName, string snapshotFileName)
+        => throw new NotImplementedException();
+    Task<bool> RecoverCollectionFromShapshot(string collectionName, string snapshotFileName, BinaryData snapshotData)
+        => throw new NotImplementedException();
+    Task<bool> DeleteCollectionShapshot(string collectionName, string snapshotName)
+        => throw new NotImplementedException();
+
+    Task<bool> CreateCollectionPayloadIndex(string collectionName, CreateVectorCollectionIndexOptions options)
+        => throw new NotImplementedException();
+    Task<bool> DeleteCollectionPayloadIndex(string collectionName, DeleteVectorCollectionIndexOptions options)
+        => throw new NotImplementedException();
 }

@@ -1,4 +1,5 @@
 using BotSharp.Abstraction.MLTasks;
+using BotSharp.Abstraction.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.SemanticKernel.Embeddings;
 using System.Collections.Generic;
@@ -24,15 +25,16 @@ namespace BotSharp.Plugin.SemanticKernel
         public SemanticKernelTextEmbeddingProvider(ITextEmbeddingGenerationService embedding, IConfiguration configuration)
 #pragma warning restore SKEXP0001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
         {
-            this._embedding = embedding;
-            this._configuration = configuration;
-            this.Dimension = configuration.GetValue<int>("SemanticKernel:Dimension");
+            _embedding = embedding;
+            _configuration = configuration;
+            _dimension = configuration.GetValue<int>("SemanticKernel:Dimension");
         }
 
         /// <inheritdoc/>
-        public int Dimension { get; set; }
+        protected int _dimension;
 
         public string Provider => "semantic-kernel";
+        public string Model => string.Empty;
 
         /// <inheritdoc/>
         public async Task<float[]> GetVectorAsync(string text)
@@ -48,6 +50,18 @@ namespace BotSharp.Plugin.SemanticKernel
             var embeddings = await this._embedding.GenerateEmbeddingsAsync(texts);
             return embeddings.Select(_ => _.ToArray())
                              .ToList();
+        }
+
+        public void SetModelName(string model) { }
+
+        public void SetDimension(int dimension)
+        {
+            _dimension = dimension > 0 ? dimension : _configuration.GetValue<int>("SemanticKernel:Dimension");
+        }
+
+        public int GetDimension()
+        {
+            return _dimension;
         }
     }
 }

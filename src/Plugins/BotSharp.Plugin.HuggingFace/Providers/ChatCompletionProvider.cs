@@ -10,10 +10,12 @@ namespace BotSharp.Plugin.HuggingFace.Providers;
 public class ChatCompletionProvider : IChatCompletion
 {
     public string Provider => "huggingface";
+    public string Model => _model;
 
     private readonly IServiceProvider _services;
     private readonly HuggingFaceSettings _settings;
     private readonly ILogger _logger;
+    private List<string> renderedInstructions = [];
     private string _model;
 
     public ChatCompletionProvider(IServiceProvider services,
@@ -74,9 +76,9 @@ public class ChatCompletionProvider : IChatCompletion
         return true;
     }
 
-    public async Task<bool> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations, Func<RoleDialogModel, Task> onMessageReceived)
+    public Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations)
     {
-        return true;
+        throw new NotImplementedException();
     }
 
     public void SetModelName(string model)
@@ -98,7 +100,7 @@ public class ChatCompletionProvider : IChatCompletion
         content += $"\r\n{AgentRole.Assistant}: ";
 
         var agentService = _services.GetRequiredService<IAgentService>();
-        var instruction = agentService.RenderedInstruction(agent);
+        var instruction = agentService.RenderInstruction(agent);
         var prompt = instruction + "\r\n" + content;
 
         var api = _services.GetRequiredService<IInferenceApi>();

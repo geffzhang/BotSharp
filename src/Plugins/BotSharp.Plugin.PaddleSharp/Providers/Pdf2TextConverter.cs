@@ -1,13 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.IO;
 using ImageMagick;
 using OpenCvSharp;
-using Microsoft.AspNetCore.Http;
 using Sdcb.PaddleInference;
 using Sdcb.PaddleOCR.Models;
-using Sdcb.PaddleOCR.Models.LocalV3;
 using Sdcb.PaddleOCR;
 using System.Threading.Tasks;
 using BotSharp.Abstraction.Knowledges;
@@ -22,14 +19,17 @@ using BotSharp.Plugin.PaddleSharp.Settings;
 namespace BotSharp.Plugin.PaddleSharp.Providers;
 
 public class Pdf2TextConverter : IPdf2TextConverter
-{    
+{
     private Dictionary<int, string> _mappings = new Dictionary<int, string>();
     private FullOcrModel _model;
     private PaddleSharpSettings _paddleSharpSettings;
+
     public Pdf2TextConverter(PaddleSharpSettings paddleSharpSettings)
     {
         _paddleSharpSettings = paddleSharpSettings;
     }
+
+    public string Provider => "Paddle";
 
     public async Task<string> ConvertPdfToText(string filePath, int? startPageNum, int? endPageNum)
     {

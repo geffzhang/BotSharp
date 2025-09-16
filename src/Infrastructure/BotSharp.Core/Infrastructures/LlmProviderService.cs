@@ -19,13 +19,19 @@ public class LlmProviderService : ILlmProviderService
     {
         var providers = new List<string>();
         var services1 = _services.GetServices<ITextCompletion>();
-        providers.AddRange(services1.Select(x => x.Provider));
+        providers.AddRange(services1
+            .Where(x => GetProviderModels(x.Provider).Any())
+            .Select(x => x.Provider));
 
         var services2 = _services.GetServices<IChatCompletion>();
-        providers.AddRange(services2.Select(x => x.Provider));
+        providers.AddRange(services2
+            .Where(x => GetProviderModels(x.Provider).Any())
+            .Select(x => x.Provider));
 
         var services3 = _services.GetServices<ITextEmbedding>();
-        providers.AddRange(services3.Select(x => x.Provider));
+        providers.AddRange(services3
+            .Where(x => GetProviderModels(x.Provider).Any())
+            .Select(x => x.Provider));
 
         return providers.Distinct().ToList();
     }
@@ -38,11 +44,22 @@ public class LlmProviderService : ILlmProviderService
             ?.Models ?? new List<LlmModelSetting>();
     }
 
-    public LlmModelSetting GetProviderModel(string provider, string id)
+    public LlmModelSetting GetProviderModel(string provider, string id, bool? multiModal = null, LlmModelType? modelType = null, bool imageGenerate = false)
     {
         var models = GetProviderModels(provider)
-            .Where(x => x.Id == id)
-            .ToList();
+            .Where(x => x.Id == id);
+
+        if (multiModal.HasValue)
+        {
+            models = models.Where(x => x.MultiModal == multiModal);
+        }
+
+        if (modelType.HasValue)
+        {
+            models = models.Where(x => x.Type == modelType.Value);
+        }
+
+        models = models.Where(x => x.ImageGeneration == imageGenerate);
 
         var random = new Random();
         var index = random.Next(0, models.Count());
@@ -85,5 +102,46 @@ public class LlmProviderService : ILlmProviderService
         }
 
         return modelSetting;
+    }
+
+
+    public List<LlmProviderSetting> GetLlmConfigs(LlmConfigOptions? options = null)
+    {
+        var settingService = _services.GetRequiredService<ISettingService>();
+        var providers = settingService.Bind<List<LlmProviderSetting>>($"LlmProviders");
+        var configs = new List<LlmProviderSetting>();
+
+        if (providers.IsNullOrEmpty()) return configs;
+
+        if (options == null) return providers ?? [];
+
+        foreach (var provider in providers)
+        {
+            var models = provider.Models ?? [];
+            if (options.Type.HasValue)
+            {
+                models = models.Where(x => x.Type == options.Type.Value).ToList();
+            }
+
+            if (options.MultiModal.HasValue)
+            {
+                models = models.Where(x => x.MultiModal == options.MultiModal.Value).ToList();
+            }
+
+            if (options.ImageGeneration.HasValue)
+            {
+                models = models.Where(x => x.ImageGeneration == options.ImageGeneration.Value).ToList();
+            }
+
+            if (models.IsNullOrEmpty())
+            {
+                continue;
+            }
+
+            provider.Models = models;
+            configs.Add(provider);
+        }
+
+        return configs;
     }
 }

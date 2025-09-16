@@ -1,7 +1,5 @@
 using BotSharp.Abstraction.Routing.Models;
-using BotSharp.Abstraction.Routing.Planning;
 using BotSharp.Abstraction.Routing.Settings;
-using System.Drawing;
 
 namespace BotSharp.Core.Routing;
 
@@ -16,12 +14,8 @@ public partial class RoutingService : IRoutingService
     public IRoutingContext Context => _context;
     public Agent Router => _router;
 
-    public void ResetRecursiveCounter()
-    {
-        _currentRecursionDepth = 0;
-    }
-
-    public RoutingService(IServiceProvider services,
+    public RoutingService(
+        IServiceProvider services,
         RoutingSettings settings,
         IRoutingContext context,
         ILogger<RoutingService> logger)
@@ -32,120 +26,49 @@ public partial class RoutingService : IRoutingService
         _logger = logger;
     }
 
-    public async Task<RoleDialogModel> InstructDirect(Agent agent, RoleDialogModel message)
+    public async Task<RoleDialogModel> InstructDirect(Agent agent, RoleDialogModel message, List<RoleDialogModel> dialogs)
     {
-        var handlers = _services.GetServices<IRoutingHandler>();
-
-        var handler = handlers.FirstOrDefault(x => x.Name == "route_to_agent");
-
         var conv = _services.GetRequiredService<IConversationService>();
-        var dialogs = new List<RoleDialogModel>();
-        if (conv.States.GetState("hide_context", "false") == "true")
+        var storage = _services.GetRequiredService<IConversationStorage>();
+        storage.Append(conv.ConversationId, message);
+
+        dialogs.Add(message);
+        Context.SetDialogs(dialogs);
+
+        var routing = _services.GetRequiredService<IRoutingService>();
+        routing.Context.Push(agent.Id, "instruct directly");
+        var agentId = routing.Context.GetCurrentAgentId();
+
+        // Update next action agent's name
+        var agentService = _services.GetRequiredService<IAgentService>();
+
+        if (agent.Disabled)
         {
+            var content = $"This agent ({agent.Name}) is disabled, please install the corresponding plugin ({agent.Plugin.Name}) to activate this agent.";
+
+            message = RoleDialogModel.From(message, role: AgentRole.Assistant, content: content);
             dialogs.Add(message);
         }
         else
         {
-            dialogs = conv.GetDialogHistory();
+            var state = _services.GetRequiredService<IConversationStateService>();
+            var useStreamMsg = state.GetState("use_stream_message");
+            var options = new InvokeAgentOptions()
+            {
+                From = InvokeSource.Routing,
+                UseStream = bool.TryParse(useStreamMsg, out var useStream) && useStream
+            };
+            var ret = await routing.InvokeAgent(agentId, dialogs, options);
         }
-        handler.SetDialogs(dialogs);
-
-        var inst = new FunctionCallFromLlm
-        {
-            Function = "route_to_agent",
-            Question = message.Content,
-            Reason = message.Content,
-            AgentName = agent.Name,
-            OriginalAgent = agent.Name,
-            ExecutingDirectly = true
-        };
-
-        var result = await handler.Handle(this, inst, message);
 
         var response = dialogs.Last();
         response.MessageId = message.MessageId;
-        response.Instruction = inst;
 
         return response;
-    }
-
-    public async Task<RoleDialogModel> InstructLoop(RoleDialogModel message)
-    {
-        var agentService = _services.GetRequiredService<IAgentService>();
-        _router = await agentService.LoadAgent(message.CurrentAgentId);
-
-        RoleDialogModel response = default;
-
-        var states = _services.GetRequiredService<IConversationStateService>();
-        var conv = _services.GetRequiredService<IConversationService>();
-        var dialogs = conv.GetDialogHistory();
-
-        var executor = _services.GetRequiredService<IExecutor>();
-
-        var planner = GetPlanner(_router);
-
-        _context.Push(_router.Id);
-
-        int loopCount = 0;
-        while (loopCount < planner.MaxLoopCount && !_context.IsEmpty)
-        {
-            loopCount++;
-
-            var conversation = await GetConversationContent(dialogs);
-            _router.TemplateDict["conversation"] = conversation;
-
-            // Get instruction from Planner
-            var inst = await planner.GetNextInstruction(_router, message.MessageId, dialogs);
-
-            await HookEmitter.Emit<IRoutingHook>(_services, async hook =>
-                await hook.OnRoutingInstructionReceived(inst, message)
-            );
-
-            // Save states
-            states.SaveStateByArgs(inst.Arguments);
-
-#if DEBUG
-            Console.WriteLine($"*** Next Instruction *** {inst}", Color.GreenYellow);
-#else
-            _logger.LogInformation($"*** Next Instruction *** {inst}");
-#endif
-            await planner.AgentExecuting(_router, inst, message, dialogs);
-
-            // Handover to Task Agent
-            if (inst.HandleDialogsByPlanner)
-            {
-                var dialogWithoutContext = planner.BeforeHandleContext(inst, message, dialogs);
-                response = await executor.Execute(this, inst, message, dialogWithoutContext);
-                planner.AfterHandleContext(dialogs, dialogWithoutContext);
-            }
-            else
-            {
-                response = await executor.Execute(this, inst, message, dialogs);
-            }
-
-            await planner.AgentExecuted(_router, inst, response, dialogs);
-        }
-
-        return response;
-    }
-
-    public List<RoutingHandlerDef> GetHandlers(Agent router)
-    {
-        var planer = GetPlanner(router);
-
-        return _services.GetServices<IRoutingHandler>()
-            .Where(x => x.Planers == null || x.Planers.Contains(planer.GetType().Name))
-            .Where(x => !string.IsNullOrEmpty(x.Description))
-            .Select((x, i) => new RoutingHandlerDef
-            {
-                Name = x.Name,
-                Description = x.Description,
-                Parameters = x.Parameters
-            }).ToList();
     }
 
 #if !DEBUG
-    [MemoryCache(10 * 60)]
+    [SharpCache(10)]
 #endif
     protected RoutingRule[] GetRoutingRecords()
     {
@@ -153,11 +76,10 @@ public partial class RoutingService : IRoutingService
 
         var filter = new AgentFilter
         {
-            Disabled = false,
-            Type = AgentType.Task
+            Disabled = false
         };
         var agents = db.GetAgents(filter);
-        var records = agents.SelectMany(x =>
+        var records = agents.Where(x => x.Type == AgentType.Task || x.Type == AgentType.Planning).SelectMany(x =>
         {
             x.RoutingRules.ForEach(r =>
             {
@@ -171,7 +93,7 @@ public partial class RoutingService : IRoutingService
     }
 
 #if !DEBUG
-    [MemoryCache(10 * 60)]
+    [SharpCache(10)]
 #endif
     public RoutableAgent[] GetRoutableAgents(List<string> profiles)
     {
@@ -179,16 +101,16 @@ public partial class RoutingService : IRoutingService
 
         var filter = new AgentFilter
         {
-            Disabled = false,
-            Type = AgentType.Task
+            Disabled = false
         };
 
         var agents = db.GetAgents(filter);
-        var routableAgents = agents.Select(x => new RoutableAgent
+        var routableAgents = agents.Where(x => x.Type == AgentType.Task || x.Type == AgentType.Planning).Select(x => new RoutableAgent
         {
             AgentId = x.Id,
             Description = x.Description,
             Name = x.Name,
+            Type = x.Type,
             Profiles = x.Profiles,
             RequiredFields = x.RoutingRules
                 .Where(p => p.Required)

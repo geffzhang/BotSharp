@@ -1,14 +1,18 @@
 using BotSharp.Abstraction.Repositories.Filters;
 using BotSharp.Abstraction.Tasks.Models;
-using BotSharp.Plugin.MongoStorage.Collections;
 
 namespace BotSharp.Plugin.MongoStorage.Repository;
 
 public partial class MongoRepository
 {
     #region Task
-    public PagedItems<AgentTask> GetAgentTasks(AgentTaskFilter filter)
+    public async ValueTask<PagedItems<AgentTask>> GetAgentTasks(AgentTaskFilter filter)
     {
+        if (filter == null)
+        {
+            filter = AgentTaskFilter.Empty();
+        }
+
         var pager = filter.Pager ?? new Pagination();
         var builder = Builders<AgentTaskDocument>.Filter;
         var filters = new List<FilterDefinition<AgentTaskDocument>>() { builder.Empty };
@@ -18,6 +22,11 @@ public partial class MongoRepository
             filters.Add(builder.Eq(x => x.AgentId, filter.AgentId));
         }
 
+        if (!string.IsNullOrEmpty(filter.Status))
+        {
+            filters.Add(builder.Eq(x => x.Status, filter.Status));
+        }
+
         if (filter.Enabled.HasValue)
         {
             filters.Add(builder.Eq(x => x.Enabled, filter.Enabled.Value));
@@ -25,30 +34,33 @@ public partial class MongoRepository
 
         var filterDef = builder.And(filters);
         var sortDef = Builders<AgentTaskDocument>.Sort.Descending(x => x.CreatedTime);
-        var totalTasks = _dc.AgentTasks.CountDocuments(filterDef);
-        var taskDocs = _dc.AgentTasks.Find(filterDef).Sort(sortDef).Skip(pager.Offset).Limit(pager.Size).ToList();
 
-        var agentIds = taskDocs.Select(x => x.AgentId).Distinct().ToList();
+        var docsTask = _dc.AgentTasks.FindAsync(filterDef, options: new()
+        {
+            Sort = sortDef,
+            Skip = pager.Offset,
+            Limit = pager.Size
+        });
+        var countTask = _dc.AgentTasks.CountDocumentsAsync(filterDef);
+        await Task.WhenAll([docsTask, countTask]);
+
+        var docs = docsTask.Result.ToList();
+        var count = countTask.Result;
+
+        var agentIds = docs.Select(x => x.AgentId).Distinct().ToList();
         var agents = GetAgents(new AgentFilter { AgentIds = agentIds });
 
-        var tasks = taskDocs.Select(x => new AgentTask
+        var tasks = docs.Select(x =>
         {
-            Id = x.Id,
-            Name = x.Name,
-            Description = x.Description,
-            Enabled = x.Enabled,
-            AgentId = x.AgentId,
-            DirectAgentId = x.DirectAgentId,
-            Content = x.Content,
-            CreatedDateTime = x.CreatedTime,
-            UpdatedDateTime = x.UpdatedTime,
-            Agent = agents.FirstOrDefault(a => a.Id == x.AgentId)
+            var task = AgentTaskDocument.ToDomainModel(x);
+            task.Agent = agents.FirstOrDefault(a => a.Id == x.AgentId);
+            return task;
         }).ToList();
 
         return new PagedItems<AgentTask>
         {
             Items = tasks,
-            Count = (int)totalTasks
+            Count = count
         };
     }
 
@@ -62,38 +74,15 @@ public partial class MongoRepository
         var agentDoc = _dc.Agents.AsQueryable().FirstOrDefault(x => x.Id == taskDoc.AgentId);
         var agent = TransformAgentDocument(agentDoc);
 
-        var task = new AgentTask
-        {
-            Id = taskDoc.Id,
-            Name = taskDoc.Name,
-            Description = taskDoc.Description,
-            Enabled = taskDoc.Enabled,
-            AgentId = taskDoc.AgentId,
-            DirectAgentId = taskDoc.DirectAgentId,
-            Content = taskDoc.Content,
-            CreatedDateTime = taskDoc.CreatedTime,
-            UpdatedDateTime = taskDoc.UpdatedTime,
-            Agent = agent
-        };
-
+        var task = AgentTaskDocument.ToDomainModel(taskDoc);
+        task.Agent = agent;
         return task;
     }
 
     public void InsertAgentTask(AgentTask task)
     {
-        var taskDoc = new AgentTaskDocument
-        {
-            Id = Guid.NewGuid().ToString(),
-            Name = task.Name,
-            Description = task.Description,
-            Enabled = task.Enabled,
-            AgentId = task.AgentId,
-            DirectAgentId = task.DirectAgentId,
-            Content = task.Content,
-            CreatedTime = DateTime.UtcNow,
-            UpdatedTime = DateTime.UtcNow
-        };
-
+        var taskDoc = AgentTaskDocument.ToMongoModel(task);
+        taskDoc.Id = Guid.NewGuid().ToString();
         _dc.AgentTasks.InsertOne(taskDoc);
     }
 
@@ -101,17 +90,11 @@ public partial class MongoRepository
     {
         if (tasks.IsNullOrEmpty()) return;
 
-        var taskDocs = tasks.Select(x => new AgentTaskDocument
+        var taskDocs = tasks.Select(x =>
         {
-            Id = string.IsNullOrEmpty(x.Id) ? Guid.NewGuid().ToString() : x.Id,
-            Name = x.Name,
-            Description = x.Description,
-            Enabled = x.Enabled,
-            AgentId = x.AgentId,
-            DirectAgentId = x.DirectAgentId,
-            Content = x.Content,
-            CreatedTime = x.CreatedDateTime,
-            UpdatedTime = x.UpdatedDateTime
+            var task = AgentTaskDocument.ToMongoModel(x);
+            task.Id = !string.IsNullOrEmpty(x.Id) ? x.Id : Guid.NewGuid().ToString();
+            return task;
         }).ToList();
 
         _dc.AgentTasks.InsertMany(taskDocs);
@@ -139,15 +122,15 @@ public partial class MongoRepository
             case AgentTaskField.Content:
                 taskDoc.Content = task.Content;
                 break;
-            case AgentTaskField.DirectAgentId:
-                taskDoc.DirectAgentId = task.DirectAgentId;
+            case AgentTaskField.Status:
+                taskDoc.Status = task.Status;
                 break;
             case AgentTaskField.All:
                 taskDoc.Name = task.Name;
                 taskDoc.Description = task.Description;
                 taskDoc.Enabled = task.Enabled;
                 taskDoc.Content = task.Content;
-                taskDoc.DirectAgentId = task.DirectAgentId;
+                taskDoc.Status = task.Status;
                 break;
         }
 
@@ -155,12 +138,16 @@ public partial class MongoRepository
         _dc.AgentTasks.ReplaceOne(filter, taskDoc);
     }
 
-    public bool DeleteAgentTask(string agentId, string taskId)
+    public bool DeleteAgentTask(string agentId, List<string> taskIds)
     {
-        if (string.IsNullOrEmpty(taskId)) return false;
+        if (taskIds.IsNullOrEmpty()) return false;
 
-        var filter = Builders<AgentTaskDocument>.Filter.Eq(x => x.Id, taskId);
-        var taskDeleted = _dc.AgentTasks.DeleteOne(filter);
+        var builder = Builders<AgentTaskDocument>.Filter;
+        var filters = new List<FilterDefinition<AgentTaskDocument>>
+        {
+            builder.In(x => x.Id, taskIds)
+        };
+        var taskDeleted = _dc.AgentTasks.DeleteMany(builder.And(filters));
         return taskDeleted.DeletedCount > 0;
     }
 

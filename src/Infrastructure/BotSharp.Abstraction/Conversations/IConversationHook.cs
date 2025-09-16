@@ -1,8 +1,8 @@
-using BotSharp.Abstraction.Functions.Models;
+using BotSharp.Abstraction.Hooks;
 
 namespace BotSharp.Abstraction.Conversations;
 
-public interface IConversationHook
+public interface IConversationHook : IHookBase
 {
     int Priority { get; }
     Agent Agent { get; }
@@ -11,6 +11,13 @@ public interface IConversationHook
 
     Conversation Conversation { get; }
     IConversationHook SetConversation(Conversation conversation);
+
+    /// <summary>
+    /// Get the predifined intent for the conversation.
+    /// It will send to the conversation context to help LLM to understand the user's intent.
+    /// </summary>
+    /// <returns></returns>
+    Task<string> GetConversationIntent() => Task.FromResult(string.Empty);
 
     /// <summary>
     /// Triggered when user connects with agent first time.
@@ -43,33 +50,28 @@ public interface IConversationHook
     Task OnDialogRecordLoaded(RoleDialogModel dialog);
 
     Task OnStateLoaded(ConversationState state);
-    Task OnStateChanged(string name, string preValue, string currentValue);
+    Task OnStateChanged(StateChangeModel stateChange);
 
     Task OnMessageReceived(RoleDialogModel message);
+    Task OnPostbackMessageReceived(RoleDialogModel message, PostbackMessageModel replyMsg);
 
     /// <summary>
     /// Triggered before LLM calls function.
     /// </summary>
     /// <param name="message"></param>
+    /// <param name="from"></param>
     /// <returns></returns>
-    Task OnFunctionExecuting(RoleDialogModel message);
+    Task OnFunctionExecuting(RoleDialogModel message, InvokeFunctionOptions? options = null);
 
     /// <summary>
     /// Triggered when the function calling completed.
     /// </summary>
     /// <param name="message"></param>
+    /// <param name="from"></param>
     /// <returns></returns>
-    Task OnFunctionExecuted(RoleDialogModel message);
+    Task OnFunctionExecuted(RoleDialogModel message, InvokeFunctionOptions? options = null);
 
     Task OnResponseGenerated(RoleDialogModel message);
-
-    /// <summary>
-    /// LLM detected the current task is completed.
-    /// It's useful for the situation of multiple tasks in the same conversation.
-    /// </summary>
-    /// <param name="conversation"></param>
-    /// <returns></returns>
-    Task OnCurrentTaskEnding(RoleDialogModel message);
 
     /// <summary>
     /// LLM detected the whole conversation is going to be end.
@@ -84,4 +86,26 @@ public interface IConversationHook
     /// <param name="conversation"></param>
     /// <returns></returns>
     Task OnHumanInterventionNeeded(RoleDialogModel message);
+
+    /// <summary>
+    /// Delete message in a conversation
+    /// </summary>
+    /// <param name="conversationId"></param>
+    /// <param name="messageId"></param>
+    /// <returns></returns>
+    Task OnMessageDeleted(string conversationId, string messageId);
+
+    /// <summary>
+    /// Brakpoint updated
+    /// </summary>
+    /// <param name="conversationId"></param>
+    /// <returns></returns>
+    Task OnBreakpointUpdated(string conversationId, bool resetStates);
+
+    /// <summary>
+    /// Generate a notification
+    /// </summary>
+    /// <param name="message"></param>
+    /// <returns></returns>
+    Task OnNotificationGenerated(RoleDialogModel message);
 }

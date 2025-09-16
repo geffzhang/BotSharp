@@ -1,3 +1,6 @@
+using BotSharp.Abstraction.Crontab;
+using BotSharp.Abstraction.Planning;
+
 namespace BotSharp.Plugin.SqlDriver;
 
 public class SqlDriverPlugin : IBotSharpPlugin
@@ -6,6 +9,11 @@ public class SqlDriverPlugin : IBotSharpPlugin
     public string Name => "SQL Driver";
     public string Description => "Convert the user requirements into corresponding SQL statements";
     public string IconUrl => "https://uxwing.com/wp-content/themes/uxwing/download/file-and-folder-type/sql-icon.png";
+
+    public string[] AgentIds =
+    [
+        BuiltInAgentId.SqlDriver
+    ];
 
     public void RegisterDI(IServiceCollection services, IConfiguration config)
     {
@@ -16,6 +24,12 @@ public class SqlDriverPlugin : IBotSharpPlugin
         });
 
         services.AddScoped<SqlDriverService>();
+        services.AddScoped<DbKnowledgeService>();
+        services.AddScoped<IPlanningHook, SqlDriverPlanningHook>();
         services.AddScoped<IKnowledgeHook, SqlDriverKnowledgeHook>();
+        services.AddScoped<IConversationHook, SqlDriverConversationHook>();
+        services.AddScoped<IAgentUtilityHook, SqlUtilityHook>();
+        services.AddScoped<ICrontabHook, SqlDriverCrontabHook>();
+        services.AddScoped<IBotSharpChartService, SqlChartService>();
     }
 }

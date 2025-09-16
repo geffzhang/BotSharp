@@ -1,59 +1,93 @@
-using BotSharp.Abstraction.Agents.Models;
-using BotSharp.Abstraction.Repositories;
-using BotSharp.Abstraction.Tasks.Models;
-using Microsoft.Extensions.Caching.Memory;
-using System.Collections.Generic;
+using BotSharp.Abstraction.Repositories.Enums;
+using BotSharp.Abstraction.Repositories.Settings;
 using System.IO;
 
 namespace BotSharp.Core.Agents.Services;
 
 public partial class AgentService
 {
-    public async Task RefreshAgents()
+    public async Task<string> RefreshAgents(IEnumerable<string>? agentIds = null)
     {
-        var isAgentDeleted = _db.DeleteAgents();
-        var isTaskDeleted = _db.DeleteAgentTasks();
-        if (!isAgentDeleted) return;
-
+        string refreshResult;
         var dbSettings = _services.GetRequiredService<BotSharpDatabaseSettings>();
+        if (dbSettings.Default == RepositoryEnum.FileRepository)
+        {
+            refreshResult = $"Invalid database repository setting: {dbSettings.Default}";
+            _logger.LogWarning(refreshResult);
+            return refreshResult;
+        }
+
         var agentDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
                                     dbSettings.FileRepository,
                                     _agentSettings.DataDir);
 
-        var user = _db.GetUserById(_user.Id);
-        var agents = new List<Agent>();
-        var userAgents = new List<UserAgent>();
-        var agentTasks = new List<AgentTask>();
-
-        foreach (var dir in Directory.GetDirectories(agentDir))
+        if (!Directory.Exists(agentDir))
         {
-            var agentJson = File.ReadAllText(Path.Combine(dir, "agent.json"));
-            var agent = JsonSerializer.Deserialize<Agent>(agentJson, _options);
-            if (agent == null) continue;
-
-            var functions = FetchFunctionsFromFile(dir);
-            var instruction = FetchInstructionFromFile(dir);
-            var responses = FetchResponsesFromFile(dir);
-            var templates = FetchTemplatesFromFile(dir);
-            var samples = FetchSamplesFromFile(dir);
-            agent.SetInstruction(instruction)
-                 .SetTemplates(templates)
-                 .SetFunctions(functions)
-                 .SetResponses(responses)
-                 .SetSamples(samples);
-            agents.Add(agent);
-
-            var userAgent = BuildUserAgent(agent.Id, user.Id);
-            userAgents.Add(userAgent);
-
-            var tasks = FetchTasksFromFile(dir);
-            agentTasks.AddRange(tasks);
+            refreshResult = $"Cannot find the directory: {agentDir}";
+            return refreshResult;
+        }
+        
+        var refreshedAgents = new List<string>();
+        var dirs = Directory.GetDirectories(agentDir);
+        if (!agentIds.IsNullOrEmpty())
+        {
+            dirs = dirs.Where(x => agentIds.Contains(x.Split(Path.DirectorySeparatorChar).Last())).ToArray();
         }
 
-        _db.BulkInsertAgents(agents);
-        _db.BulkInsertUserAgents(userAgents);
-        _db.BulkInsertAgentTasks(agentTasks);
+        foreach (var dir in dirs)
+        {
+            try
+            {
+                var agentJson = File.ReadAllText(Path.Combine(dir, "agent.json"));
+                var agent = JsonSerializer.Deserialize<Agent>(agentJson, _options);
+                
+                if (agent == null)
+                {
+                    _logger.LogError($"Cannot find agent in file directory: {dir}");
+                    continue;
+                }
 
-        Utilities.ClearCache();
+                var (defaultInstruction, channelInstructions) = GetInstructionsFromFile(dir);
+                var functions = GetFunctionsFromFile(dir);
+                var responses = GetResponsesFromFile(dir);
+                var templates = GetTemplatesFromFile(dir);
+                var samples = GetSamplesFromFile(dir);
+                agent.SetInstruction(defaultInstruction)
+                     .SetChannelInstructions(channelInstructions)
+                     .SetTemplates(templates)
+                     .SetFunctions(functions)
+                     .SetResponses(responses)
+                     .SetSamples(samples);
+
+                var tasks = GetTasksFromFile(dir);
+
+                var isAgentDeleted = _db.DeleteAgent(agent.Id);
+                if (isAgentDeleted)
+                {
+                    await Task.Delay(100);
+                    _db.BulkInsertAgents(new List<Agent> { agent });
+                    _db.BulkInsertAgentTasks(tasks);
+                    refreshedAgents.Add(agent.Name);
+                    _logger.LogInformation($"Agent {agent.Name} has been migrated.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Failed to migrate agent in file directory: {dir}\r\nError: {ex.Message}");
+            }
+        }
+
+        if (!refreshedAgents.IsNullOrEmpty())
+        {
+            Utilities.ClearCache();
+            refreshResult = $"Agents are migrated!\r\n{string.Join("\r\n", refreshedAgents)}";
+        }
+        else
+        {
+            refreshResult = "No agent gets migrated!";
+        }
+
+        _logger.LogInformation(refreshResult);
+        return refreshResult;
     }
 }

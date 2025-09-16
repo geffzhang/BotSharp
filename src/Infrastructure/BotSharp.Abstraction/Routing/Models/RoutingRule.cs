@@ -18,11 +18,17 @@ public class RoutingRule
     /// <summary>
     /// Field type: string, number, object
     /// </summary>
+    [JsonPropertyName("field_type")]
     public string FieldType { get; set; } = "string";
 
     public bool Required { get; set; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RedirectTo { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("redirect_to_agent")]
+    public string? RedirectToAgentName { get; set; }
 
     public override string ToString()
     {

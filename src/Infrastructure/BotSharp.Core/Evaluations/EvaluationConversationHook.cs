@@ -1,4 +1,5 @@
 using BotSharp.Abstraction.Evaluations;
+using BotSharp.Abstraction.Routing.Models;
 
 namespace BotSharp.Core.Evaluations;
 
@@ -15,45 +16,45 @@ public class EvaluationConversationHook : ConversationHookBase
 
     public override Task OnMessageReceived(RoleDialogModel message)
     {
-        if (_convSettings.EnableExecutionLog)
+        if (Conversation != null && _convSettings.EnableExecutionLog)
         {
-            _logger.Append(_conversation.Id, $"[{DateTime.Now}] {message.Role}: {message.Content}");
+            _logger.Append(Conversation.Id, $"[{DateTime.Now}] {message.Role}: {message.Content}");
         }
         return base.OnMessageReceived(message);
     }
 
-    public override Task OnFunctionExecuted(RoleDialogModel message)
+    public override Task OnFunctionExecuted(RoleDialogModel message, InvokeFunctionOptions? options = null)
     {
-        if (_convSettings.EnableExecutionLog)
+        if (Conversation != null && _convSettings.EnableExecutionLog)
         {
-            _logger.Append(_conversation.Id, $"[{DateTime.Now}] {message.Role}: {message.FunctionName}({message.FunctionArgs}) => {message.Content}");
+            _logger.Append(Conversation.Id, $"[{DateTime.Now}] {message.Role}: {message.FunctionName}({message.FunctionArgs}) => {message.Content}");
         } 
-        return base.OnFunctionExecuted(message);
+        return base.OnFunctionExecuted(message, options);
     }
 
     public override Task OnResponseGenerated(RoleDialogModel message)
     {
-        if (_convSettings.EnableExecutionLog)
+        if (Conversation != null && _convSettings.EnableExecutionLog)
         {
-            _logger.Append(_conversation.Id, $"[{DateTime.Now}] {message.Role}: {message.Content}");
-        } 
+            _logger.Append(Conversation.Id, $"[{DateTime.Now}] {message.Role}: {message.Content}");
+        }
         return base.OnResponseGenerated(message);
     }
 
     public override Task OnHumanInterventionNeeded(RoleDialogModel message)
     {
-        if (_convSettings.EnableExecutionLog)
+        if (Conversation != null && _convSettings.EnableExecutionLog)
         {
-            _logger.Append(_conversation.Id, $"[{DateTime.Now}] {AgentRole.Function}: trigger_event({{\"event\": \"{message.FunctionName}\"}})");
+            _logger.Append(Conversation.Id, $"[{DateTime.Now}] {AgentRole.Function}: trigger_event({{\"event\": \"{message.FunctionName}\"}})");
         }
         return base.OnHumanInterventionNeeded(message);
     }
 
     public override Task OnConversationEnding(RoleDialogModel message)
     {
-        if (_convSettings.EnableExecutionLog)
+        if (Conversation != null && _convSettings.EnableExecutionLog)
         {
-            _logger.Append(_conversation.Id, $"[{DateTime.Now}] {AgentRole.Function}: trigger_event({{\"event\": \"{message.FunctionName}\"}})");
+            _logger.Append(Conversation.Id, $"[{DateTime.Now}] {AgentRole.Function}: trigger_event({{\"event\": \"{message.FunctionName}\"}})");
         }
         return base.OnConversationEnding(message);
     }

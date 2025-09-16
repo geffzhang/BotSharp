@@ -2,34 +2,30 @@ namespace BotSharp.Abstraction.Conversations;
 
 public abstract class ConversationHookBase : IConversationHook
 {
-    protected Agent _agent;
-    public Agent Agent => _agent;
+    public Agent Agent { get; private set; }
 
-    protected Conversation _conversation;
-    public Conversation Conversation => _conversation;
+    public Conversation Conversation { get; private set; }
 
-    protected List<RoleDialogModel> _dialogs;
-    public List<RoleDialogModel> Dialogs => _dialogs;
+    public List<RoleDialogModel> Dialogs { get; private set; }
 
-    protected int _priority = 0;
-    public int Priority => _priority;
+    public int Priority { get; protected set; } = 0;
 
     public IConversationHook SetAgent(Agent agent)
     {
-        _agent = agent;
+        Agent = agent;
         return this;
     }
 
     public IConversationHook SetConversation(Conversation conversation)
     {
-        _conversation = conversation;
+        Conversation = conversation;
         return this;
     }
 
     public virtual Task OnStateLoaded(ConversationState state)
         => Task.CompletedTask;
 
-    public virtual Task OnStateChanged(string name, string preValue, string currentValue)
+    public virtual Task OnStateChanged(StateChangeModel stateChange)
         => Task.CompletedTask;
 
     public virtual Task OnDialogRecordLoaded(RoleDialogModel dialog)
@@ -37,26 +33,32 @@ public abstract class ConversationHookBase : IConversationHook
 
     public virtual Task OnDialogsLoaded(List<RoleDialogModel> dialogs)
     {
-        _dialogs = dialogs;
+        Dialogs = dialogs;
         return Task.CompletedTask;
     }
 
     public virtual Task OnConversationEnding(RoleDialogModel message)
         => Task.CompletedTask;
 
-    public virtual Task OnCurrentTaskEnding(RoleDialogModel message)
+    public virtual Task OnNewTaskDetected(RoleDialogModel message, string reason)
+        => Task.CompletedTask;
+
+    public virtual Task OnTaskCompleted(RoleDialogModel message)
         => Task.CompletedTask;
 
     public virtual Task OnHumanInterventionNeeded(RoleDialogModel message)
         => Task.CompletedTask;
 
-    public virtual Task OnFunctionExecuting(RoleDialogModel message)
+    public virtual Task OnFunctionExecuting(RoleDialogModel message, InvokeFunctionOptions? options = null)
         => Task.CompletedTask;
 
-    public virtual Task OnFunctionExecuted(RoleDialogModel message)
+    public virtual Task OnFunctionExecuted(RoleDialogModel message, InvokeFunctionOptions? options = null)
         => Task.CompletedTask;
 
     public virtual Task OnMessageReceived(RoleDialogModel message)
+        => Task.CompletedTask;
+
+    public virtual Task OnPostbackMessageReceived(RoleDialogModel message, PostbackMessageModel replyMsg)
         => Task.CompletedTask;
 
     public virtual Task OnResponseGenerated(RoleDialogModel message)
@@ -66,5 +68,14 @@ public abstract class ConversationHookBase : IConversationHook
         => Task.CompletedTask;
 
     public virtual Task OnUserAgentConnectedInitially(Conversation conversation)
+        => Task.CompletedTask;
+
+    public virtual Task OnMessageDeleted(string conversationId, string messageId)
+        => Task.CompletedTask;
+
+    public virtual Task OnBreakpointUpdated(string conversationId, bool resetStates)
+        => Task.CompletedTask;
+
+    public virtual Task OnNotificationGenerated(RoleDialogModel message)
         => Task.CompletedTask;
 }

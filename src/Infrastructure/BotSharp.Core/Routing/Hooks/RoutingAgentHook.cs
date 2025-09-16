@@ -1,8 +1,5 @@
-using BotSharp.Abstraction.Functions.Models;
-using BotSharp.Abstraction.Routing;
 using BotSharp.Abstraction.Routing.Enums;
 using BotSharp.Abstraction.Routing.Settings;
-using System.Diagnostics.Metrics;
 
 namespace BotSharp.Core.Routing.Hooks;
 
@@ -27,8 +24,41 @@ public class RoutingAgentHook : AgentHookBase
 
         var routing = _services.GetRequiredService<IRoutingService>();
         var agents = routing.GetRoutableAgents(_agent.Profiles);
+
+        // 过滤 Planner
+        var planningRule = _agent.RoutingRules.FirstOrDefault(x => x.Type == "planner");
+        if (planningRule != null)
+        {
+            var planners = agents.Where(x => x.Type == AgentType.Planning && x.Name != planningRule.Field).ToArray();
+            agents = agents.Except(planners).ToArray();
+        }
+
+        // Postprocess agent required fields, remove it if the states exists
+        var states = _services.GetRequiredService<IConversationStateService>();
+        foreach (var agent in agents)
+        {
+            var fields = agent.RequiredFields.ToArray();
+            foreach (var field in fields)
+            {
+                if (states.ContainsState(field.Name))
+                {
+                    var requiredField = agent.RequiredFields.First(x => x.Name == field.Name);
+                    agent.RequiredFields.Remove(requiredField);
+                }
+            }
+
+            fields = agent.OptionalFields.ToArray();
+            foreach (var field in fields)
+            {
+                if (states.ContainsState(field.Name))
+                {
+                    var optionalField = agent.OptionalFields.First(x => x.Name == field.Name);
+                    agent.OptionalFields.Remove(optionalField);
+                }
+            }
+        }
+
         dict["routing_agents"] = agents;
-        dict["routing_handlers"] = routing.GetHandlers(_agent);
 
         return base.OnInstructionLoaded(template, dict);
     }

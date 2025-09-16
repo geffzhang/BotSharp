@@ -1,3 +1,6 @@
+using BotSharp.Abstraction.Infrastructures.Attributes;
+using BotSharp.Abstraction.Roles;
+using BotSharp.Abstraction.Users.Settings;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using System.ComponentModel.DataAnnotations;
@@ -10,10 +13,19 @@ public class UserController : ControllerBase
 {
     private readonly IServiceProvider _services;
     private readonly IUserService _userService;
-    public UserController(IUserService userService, IServiceProvider services)
+    private readonly IUserIdentity _user;
+    private readonly AccountSetting _setting;
+
+    public UserController(
+        IUserService userService,
+        IServiceProvider services,
+        IUserIdentity user,
+        AccountSetting setting)
     {
         _services = services;
         _userService = userService;
+        _user = user;
+        _setting = setting;
     }
 
     [AllowAnonymous]
@@ -36,7 +48,7 @@ public class UserController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("/sso/{provider}")]
-    public async Task<IActionResult> Authorize([FromRoute] string provider,string redirectUrl)
+    public async Task<IActionResult> Authorize([FromRoute] string provider, string redirectUrl)
     {
         return Challenge(new AuthenticationProperties { RedirectUri = redirectUrl }, provider);
     }
@@ -61,11 +73,23 @@ public class UserController : ControllerBase
         return UserViewModel.FromUser(createdUser);
     }
 
+    [AllowAnonymous]
+    [HttpPost("/user/activate")]
+    public async Task<ActionResult<Token>> ActivateUser(UserActivationModel model)
+    {
+        var token = await _userService.ActiveUser(model);
+        if (token == null)
+        {
+            return BadRequest();
+        }
+        return Ok(token);
+    }
+
     [HttpGet("/user/me")]
     public async Task<UserViewModel> GetMyUserProfile()
     {
         var user = await _userService.GetMyProfile();
-        if (user == null)
+        if (user == null && _setting.CreateUserAutomatically)
         {
             var identiy = _services.GetRequiredService<IUserIdentity>();
             var accessor = _services.GetRequiredService<IHttpContextAccessor>();
@@ -78,8 +102,159 @@ public class UserController : ControllerBase
                 LastName = identiy.LastName,
                 Source = claims.First().Issuer,
                 ExternalId = identiy.Id,
+                RegionCode = identiy.RegionCode,
+                Phone = identiy.Phone,
             });
         }
+
+        if (user != null)
+        {
+            var auth = await _userService.GetUserAuthorizations();
+            user.Permissions = auth?.Permissions ?? [];
+        }
+
         return UserViewModel.FromUser(user);
     }
+
+    [AllowAnonymous]
+    [HttpGet("/user/name/existing")]
+    public async Task<bool> VerifyUserNameExisting([FromQuery] string userName)
+    {
+        return await _userService.VerifyUserNameExisting(userName);
+    }
+
+    [AllowAnonymous]
+    [HttpGet("/user/email/existing")]
+    public async Task<bool> VerifyEmailExisting([FromQuery] string email)
+    {
+        return await _userService.VerifyEmailExisting(email);
+    }
+
+    [AllowAnonymous]
+    [HttpGet("/user/phone/existing")]
+    public async Task<bool> VerifyPhoneExisting([FromQuery] string phone, [FromQuery] string regionCode = "CN")
+    {
+        return await _userService.VerifyPhoneExisting(phone, regionCode);
+    }
+
+    [AllowAnonymous]
+    [HttpPost("/user/verifycode-out")]
+    public async Task<bool> SendVerificationCodeResetPassword([FromBody] UserCreationModel user)
+    {
+        return await _userService.SendVerificationCodeNoLogin(user.ToUser());
+    }
+
+    [HttpPost("/user/verifycode-in")]
+    public async Task<bool> SendVerificationCodeResetPasswordLogined()
+    {
+        return await _userService.SendVerificationCodeLogin();
+    }
+
+    [AllowAnonymous]
+    [HttpPost("/user/resetpassword")]
+    public async Task<bool> ResetUserPassword([FromBody] UserResetPasswordModel user)
+    {
+        return await _userService.ResetUserPassword(user.ToUser());
+    }
+
+    [HttpPost("/user/updatepassword")]
+    public async Task<bool> UpdatePassword([FromBody] User user)
+    {
+        if (string.IsNullOrWhiteSpace(user.Password) || string.IsNullOrWhiteSpace(user.VerificationCode))
+        {
+            return false;
+        }
+        return await _userService.UpdatePassword(user.Password, user.VerificationCode);
+    }
+
+    [HttpPost("/user/email/modify")]
+    public async Task<bool> ModifyUserEmail([FromQuery] string email)
+    {
+        return await _userService.ModifyUserEmail(email);
+    }
+
+    [HttpPost("/user/phone/modify")]
+    public async Task<bool> ModifyUserPhone([FromQuery] string phone, [FromQuery] string regionCode = "CN")
+    {
+        return await _userService.ModifyUserPhone(phone, regionCode);
+    }
+
+    [HttpPost("/user/update/isdisable")]
+    public async Task<bool> UpdateUsersIsDisable([FromQuery] List<string> userIds, [FromQuery] bool isDisable)
+    {
+        return await _userService.UpdateUsersIsDisable(userIds, isDisable);
+    }
+
+    #region User management
+    [HttpPost("/users")]
+    public async Task<PagedItems<UserViewModel>> GetUsers([FromBody] UserFilter filter)
+    {
+        var userService = _services.GetRequiredService<IUserService>();
+        var users = await userService.GetUsers(filter);
+        var views = users.Items.Select(x => UserViewModel.FromUser(x)).ToList();
+
+        return new PagedItems<UserViewModel>
+        {
+            Count = users.Count,
+            Items = views
+        };
+    }
+
+    [BotSharpAuth]
+    [HttpGet("/user/{id}/details")]
+    public async Task<UserViewModel> GetUserDetails(string id)
+    {
+        var userService = _services.GetRequiredService<IUserService>();
+        var user = await userService.GetUserDetails(id, includeAgent: true);
+        return UserViewModel.FromUser(user);
+    }
+
+    [BotSharpAuth]
+    [HttpPut("/user")]
+    public async Task<bool> UpdateUser([FromBody] UserUpdateModel model)
+    {
+        if (model == null) return false;
+
+        var userService = _services.GetRequiredService<IUserService>();
+        var updated = await userService.UpdateUser(UserUpdateModel.ToUser(model), isUpdateUserAgents: true);
+        return updated;
+    }
+    #endregion
+
+
+    #region Avatar
+    [HttpPost("/user/avatar")]
+    public bool UploadUserAvatar([FromBody] UserAvatarModel input)
+    {
+        var fileStorage = _services.GetRequiredService<IFileStorageService>();
+        var file = new FileDataModel
+        {
+            FileName = input.FileName,
+            FileData = input.FileData,
+        };
+        return fileStorage.SaveUserAvatar(file);
+    }
+
+    [HttpGet("/user/avatar")]
+    public IActionResult GetUserAvatar()
+    {
+        var fileStorage = _services.GetRequiredService<IFileStorageService>();
+        var file = fileStorage.GetUserAvatar();
+        if (string.IsNullOrEmpty(file))
+        {
+            return NoContent();
+        }
+        return BuildFileResult(file);
+    }
+    #endregion
+
+
+    #region Private methods
+    private FileContentResult BuildFileResult(string file)
+    {
+        var fileStorage = _services.GetRequiredService<IFileStorageService>();
+        var binary = fileStorage.GetFileBytes(file);
+        return File(binary.ToArray(), "application/octet-stream", Path.GetFileName(file));
+    }
+    #endregion
 }

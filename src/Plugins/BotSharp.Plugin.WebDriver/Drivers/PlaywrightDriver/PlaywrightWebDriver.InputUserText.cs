@@ -1,14 +1,13 @@
-using Microsoft.Extensions.Logging;
-
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver
 {
-    public async Task<bool> InputUserText(BrowserActionParams actionParams)
+    public async Task<BrowserActionResult> InputUserText(BrowserActionParams actionParams)
     {
-        await _instance.Wait(actionParams.ConversationId);
+        var result = new BrowserActionResult();
+        await _instance.Wait(actionParams.ContextId);
 
-        var page = _instance.GetPage(actionParams.ConversationId);
+        var page = _instance.GetPage(actionParams.ContextId);
         ILocator locator = default;
         int count = 0;
 
@@ -38,16 +37,15 @@ public partial class PlaywrightWebDriver
         if (count == 0)
         {
             var driverService = _services.GetRequiredService<WebDriverService>();
-            var html = await FilteredInputHtml(actionParams.ConversationId);
+            var html = await FilteredInputHtml(actionParams.ContextId);
             var htmlElementContextOut = await driverService.InferElement(actionParams.Agent,
                 html,
                 actionParams.Context.ElementText,
                 actionParams.MessageId);
-            locator = Locator(actionParams.ConversationId, htmlElementContextOut);
+            locator = Locator(actionParams.ContextId, htmlElementContextOut);
             count = await locator.CountAsync();
         }
-        
-        if (count == 1)
+        else if (count > 0)
         {
             try
             {
@@ -58,16 +56,18 @@ public partial class PlaywrightWebDriver
                 }
 
                 // Triggered ajax
-                await _instance.Wait(actionParams.ConversationId);
-                return true;
+                await _instance.Wait(actionParams.ContextId);
+                result.IsSuccess = true;
             }
             catch (Exception ex)
             {
+                result.Message = ex.Message;
+                result.StackTrace = ex.StackTrace;
                 _logger.LogError(ex.Message);
             }
         }
 
-        return false;
+        return result;
     }
 
     private async Task<string> FilteredInputHtml(string conversationId)

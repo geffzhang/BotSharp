@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Authorization;
 using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.MLTasks;
 using BotSharp.Abstraction.MLTasks.Settings;
+using BotSharp.Abstraction.Routing;
 
 namespace BotSharp.Plugin.ChatbotUI.Controllers;
 
@@ -72,6 +73,9 @@ public class ChatbotUiController : ControllerBase
             .Name;
 
         var conv = _services.GetRequiredService<IConversationService>();
+        var routing = _services.GetRequiredService<IRoutingService>();
+        routing.Context.SetMessageId(input.ConversationId, message.MessageId);
+
         conv.SetConversationId(input.ConversationId, input.States);
         conv.States.SetState("channel", input.Channel)
                    .SetState("provider", "azure-openai")
@@ -80,13 +84,10 @@ public class ChatbotUiController : ControllerBase
                    .SetState("sampling_factor", input.SamplingFactor);
 
         var result = await conv.SendMessage(input.AgentId,
-            message, 
+            message,
+            replyMessage: null,
             async msg => 
-                await OnChunkReceived(outputStream, msg),
-            async fn 
-                => await Task.CompletedTask,
-            async fn
-                => await Task.CompletedTask);
+                await OnChunkReceived(outputStream, msg));
 
         await OnEventCompleted(outputStream);
     }

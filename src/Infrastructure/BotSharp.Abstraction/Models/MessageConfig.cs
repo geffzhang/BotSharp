@@ -1,6 +1,6 @@
 namespace BotSharp.Abstraction.Models;
 
-public class MessageConfig : TruncateMessageRequest
+public class MessageConfig
 {
     /// <summary>
     /// Completion Provider
@@ -13,6 +13,12 @@ public class MessageConfig : TruncateMessageRequest
     /// </summary>
     [JsonPropertyName("model")]
     public virtual string? Model { get; set; } = null;
+
+    /// <summary>
+    /// Model id
+    /// </summary>
+    [JsonPropertyName("model_id")]
+    public virtual string? ModelId { get; set; } = null;
 
     /// <summary>
     /// The sampling temperature to use that controls the apparent creativity of generated completions.
@@ -28,7 +34,12 @@ public class MessageConfig : TruncateMessageRequest
     /// <summary>
     /// Conversation states from input
     /// </summary>
-    public List<string> States { get; set; } = new List<string>();
+    public List<MessageState> States { get; set; } = new();
+
+    /// <summary>
+    /// Conversation tags
+    /// </summary>
+    public List<string> Tags { get; set; } = new();
 
     /// <summary>
     /// Agent task id

@@ -26,6 +26,7 @@ namespace BotSharp.Plugin.SemanticKernel
 
         /// <inheritdoc/>
         public string Provider => "semantic-kernel";
+        public string Model => _model;
 
         /// <summary>
         /// Create a new instance of <see cref="SemanticKernelChatCompletionProvider"/>
@@ -53,7 +54,7 @@ namespace BotSharp.Plugin.SemanticKernel
             var completion = this._kernelChatCompletion;
 
             var agentService = _services.GetRequiredService<IAgentService>();
-            var instruction = agentService.RenderedInstruction(agent);
+            var instruction = agentService.RenderInstruction(agent);
 
             ChatHistory chatHistory = new ChatHistory(instruction);
 
@@ -69,12 +70,13 @@ namespace BotSharp.Plugin.SemanticKernel
                 }
             }
 
-            var ChatMessage = await completion.GetChatMessageContentsAsync(chatHistory);
-            var chatMessageContent =  ChatMessage?.FirstOrDefault();
+            var contents = await completion.GetChatMessageContentsAsync(chatHistory);
+            var chatMessageContent = contents?.FirstOrDefault();
             var response = chatMessageContent != null ? chatMessageContent.Content :string.Empty;
             var msg = new RoleDialogModel(AgentRole.Assistant, response)
             {
-                CurrentAgentId = agent.Id
+                CurrentAgentId = agent.Id,
+                RenderedInstruction = instruction
             };
 
             // After chat completion hook
@@ -92,7 +94,7 @@ namespace BotSharp.Plugin.SemanticKernel
             throw new NotImplementedException();
         }
         /// <inheritdoc/>
-        public Task<bool> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations, Func<RoleDialogModel, Task> onMessageReceived)
+        public Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations)
         {
             throw new NotImplementedException();
         }

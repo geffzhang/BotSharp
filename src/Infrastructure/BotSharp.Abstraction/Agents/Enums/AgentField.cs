@@ -8,15 +8,23 @@ public enum AgentField
     IsPublic,
     Disabled,
     Type,
+    RoutingMode,
+    FuncVisMode,
     InheritAgentId,
-    Profiles,
+    Profile,
+    Label,
     RoutingRule,
     Instruction,
     Function,
     Template,
     Response,
     Sample,
-    LlmConfig
+    LlmConfig,
+    Utility,
+    McpTool,
+    KnowledgeBase,
+    Rule,
+    MaxMessageCount
 }
 
 public enum AgentTaskField
@@ -26,5 +34,5 @@ public enum AgentTaskField
     Description,
     Enabled,
     Content,
-    DirectAgentId
+    Status
 }

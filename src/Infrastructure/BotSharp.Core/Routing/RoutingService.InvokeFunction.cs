@@ -1,64 +1,90 @@
-using BotSharp.Abstraction.Functions;
+using BotSharp.Abstraction.Routing.Models;
+using BotSharp.Core.MessageHub;
+using BotSharp.Core.Routing.Executor;
 
 namespace BotSharp.Core.Routing;
 
 public partial class RoutingService
 {
-    public async Task<bool> InvokeFunction(string name, RoleDialogModel message)
+    public async Task<bool> InvokeFunction(string name, RoleDialogModel message, InvokeFunctionOptions? options = null)
     {
-        var function = _services.GetServices<IFunctionCallback>().FirstOrDefault(x => x.Name == name);
-        if (function == null)
+        options ??= InvokeFunctionOptions.Default();
+        var currentAgentId = message.CurrentAgentId;
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var agent = await agentService.GetAgent(currentAgentId);
+
+        var funcExecutor = FunctionExecutorFactory.Create(_services, name, agent);
+        if (funcExecutor == null)
         {
             message.StopCompletion = true;
-            message.Content = $"Can't find function implementation of {message.FunctionName}.";
+            message.Content = $"Can't find function implementation of {name}.";
             _logger.LogError(message.Content);
             return false;
         }
 
-        var originalFunctionName = message.FunctionName;
-        message.FunctionName = name;
-        message.Role = AgentRole.Function;
-        message.FunctionArgs = message.FunctionArgs;
+        // Clone message
+        var clonedMessage = RoleDialogModel.From(message);
+        clonedMessage.FunctionName = name;
+        clonedMessage.Indication = await funcExecutor.GetIndicatorAsync(message);
 
-        var hooks = _services.GetServices<IConversationHook>()
-            .OrderBy(x => x.Priority)
-            .ToList();
+        var conv = _services.GetRequiredService<IConversationService>();
+        var messageHub = _services.GetRequiredService<MessageHub<HubObserveData<RoleDialogModel>>>();
+        messageHub.Push(new()
+        {
+            EventName = ChatEvent.OnIndicationReceived,
+            Data = clonedMessage,
+            RefId = conv.ConversationId
+        });
 
-        // Before executing functions
+        var hooks = _services.GetHooksOrderByPriority<IConversationHook>(clonedMessage.CurrentAgentId);
         foreach (var hook in hooks)
         {
-            await hook.OnFunctionExecuting(message);
+            hook.SetAgent(agent);
+            await hook.OnFunctionExecuting(clonedMessage, options);
         }
 
         bool result = false;
 
         try
         {
-            result = await function.Execute(message);
+            result = await funcExecutor.ExecuteAsync(clonedMessage);
+
+            // After functions have been executed
+            foreach (var hook in hooks)
+            {
+                await hook.OnFunctionExecuted(clonedMessage, options);
+            }
+
+            // Set result to original message
+            message.Role = clonedMessage.Role;
+            message.PostbackFunctionName = clonedMessage.PostbackFunctionName;
+            message.CurrentAgentId = clonedMessage.CurrentAgentId;
+            message.Content = clonedMessage.Content;
+            // Don't copy payload
+            // message.Payload = clonedMessage.Payload;
+            message.StopCompletion = clonedMessage.StopCompletion;
+            message.RichContent = clonedMessage.RichContent;
+            message.Data = clonedMessage.Data;
+            message.MessageLabel = clonedMessage.MessageLabel;
+            message.AdditionalMessageWrapper = clonedMessage.AdditionalMessageWrapper;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, $"The input does not contain any JSON tokens:\r\n{message.Content}\r\n{ex.Message}");
+            message.StopCompletion = true;
+            message.Content = ex.Message;
         }
         catch (Exception ex)
         {
             message.StopCompletion = true;
             message.Content = ex.Message;
-            _logger.LogError(ex.ToString());
+            _logger.LogError(ex, ex.ToString());
         }
 
         // Make sure content has been populated
         if (string.IsNullOrEmpty(message.Content) && message.Data != null)
         {
             message.Content = JsonSerializer.Serialize(message.Data);
-        }
-
-        // After functions have been executed
-        foreach (var hook in hooks)
-        {
-            await hook.OnFunctionExecuted(message);
-        }
-
-        // restore original function name
-        if (!message.StopCompletion && message.FunctionName != originalFunctionName)
-        {
-            message.FunctionName = originalFunctionName;
         }
 
         return result;

@@ -1,4 +1,3 @@
-using BotSharp.Abstraction.Routing.Models;
 using System.Text.Json;
 
 namespace BotSharp.Abstraction.Functions.Models;
@@ -35,15 +34,8 @@ public class FunctionCallFromLlm : RoutingArgs
 
     public override string ToString()
     {
-        var route = string.IsNullOrEmpty(AgentName) ? "" : $"<Route to {AgentName.ToUpper()} because {Reason}>";
+        var route = string.IsNullOrEmpty(AgentName) ? "" : $"<Route to {AgentName.ToUpper()} because {NextActionReason}>";
 
-        if (string.IsNullOrEmpty(Response))
-        {
-            return $"[{Function} {route} {JsonSerializer.Serialize(Arguments)}]: {Question}";
-        }
-        else
-        {
-            return $"[{Function} {route} {JsonSerializer.Serialize(Arguments)}]: {Question} => {Response}";
-        }
+        return $"[{Function} {route} {JsonSerializer.Serialize(Arguments)}]: {Question}";
     }
 }

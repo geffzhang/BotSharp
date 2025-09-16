@@ -26,11 +26,16 @@ public class InputUserPasswordFn : IFunctionCallback
         args.Password = webDriverService.ReplaceToken(args.Password);
         var result = await _browser.InputUserPassword(new BrowserActionParams(agent, args, convService.ConversationId, message.MessageId));
 
-        message.Content = result ? "Input password successfully" : "Input password failed";
+        message.Content = result.IsSuccess ? "Input password successfully" : "Input password failed";
 
         var path = webDriverService.GetScreenshotFilePath(message.MessageId);
 
-        message.Data = await _browser.ScreenshotAsync(convService.ConversationId, path);
+        message.Data = await _browser.ScreenshotAsync(new MessageInfo
+        {
+            AgentId = message.CurrentAgentId,
+            ContextId = webDriverService.GetMessageContext(message),
+            MessageId = message.MessageId
+        }, path);
 
         return true;
     }

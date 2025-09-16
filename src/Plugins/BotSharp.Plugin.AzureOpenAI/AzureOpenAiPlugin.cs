@@ -1,12 +1,11 @@
-using BotSharp.Abstraction.Evaluations.Settings;
-using BotSharp.Abstraction.MLTasks;
 using BotSharp.Abstraction.Plugins;
 using BotSharp.Abstraction.Settings;
-using BotSharp.Plugin.AzureOpenAI.Providers;
-using BotSharp.Plugin.AzureOpenAI.Settings;
+using BotSharp.Plugin.AzureOpenAI.Providers.Audio;
+using BotSharp.Plugin.AzureOpenAI.Providers.Chat;
+using BotSharp.Plugin.AzureOpenAI.Providers.Embedding;
+using BotSharp.Plugin.AzureOpenAI.Providers.Image;
+using BotSharp.Plugin.AzureOpenAI.Providers.Text;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using System;
 
 namespace BotSharp.Platform.AzureAi;
 
@@ -30,5 +29,8 @@ public class AzureOpenAiPlugin : IBotSharpPlugin
 
         services.AddScoped<ITextCompletion, TextCompletionProvider>();
         services.AddScoped<IChatCompletion, ChatCompletionProvider>();
+        services.AddScoped<ITextEmbedding, TextEmbeddingProvider>();
+        services.AddScoped<IImageCompletion, ImageCompletionProvider>();
+        services.AddScoped<IAudioTranscription, AudioCompletionProvider>();
     }
 }

@@ -1,16 +1,24 @@
 {
   "id": "beda4c12-e1ec-4b4b-b328-3df4a6687c4f",
   "name": "SQL Driver",
-  "description": "Convert the requirements into corresponding SQL statements according to the table structure.",
+  "description": "Transfer to this Agent when user mentions to execute the sql statement. Only call when executable SQL statements are explicitly provided in the context.",
+  "iconUrl": "https://cdn-icons-png.flaticon.com/512/3161/3161158.png",
   "type": "task",
   "createdDateTime": "2023-11-15T13:49:00Z",
   "updatedDateTime": "2023-11-15T13:49:00Z",
   "disabled": false,
   "isPublic": true,
-  "profiles": [ "tool", "sql" ],
+  "profiles": [ "database" ],
   "llmConfig": {
-    "model": "gpt-4-0125",
-    "model3": "gpt-35-turbo-1106",
-    "max_recursion_depth": 10
-  }
+    "provider": "openai",
+    "model": "gpt-4o-2024-11-20"
+  },
+  "routingRules": [
+    {
+      "field": "sql_statement",
+      "required": true,
+      "field_type": "string",
+      "description": "SQL statement explicitly provided in the context."
+    }
+  ]
 }

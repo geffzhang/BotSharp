@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>$(TargetFramework)</TargetFramework>
@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="packages\**" />
+    <EmbeddedResource Remove="packages\**" />
+    <None Remove="packages\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="..\..\..\arts\Icon.png">
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>
@@ -18,27 +24,31 @@
   </ItemGroup>
   
   <ItemGroup>
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="8.0.2" />
-    <PackageReference Include="AspNet.Security.OAuth.GitHub" Version="8.0.0" />
-    <PackageReference Include="AspNet.Security.OAuth.Keycloak" Version="8.0.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.2" />
-    <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="8.0.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" />
+    <PackageReference Include="AspNet.Security.OAuth.GitHub" />
+    <PackageReference Include="AspNet.Security.OAuth.Keycloak" />
+    <PackageReference Include="AspNet.Security.OAuth.Weixin" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" />
   </ItemGroup>
   
   <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="6.0.27" />
-    <PackageReference Include="AspNet.Security.OAuth.GitHub" Version="6.0.15" />
-    <PackageReference Include="AspNet.Security.OAuth.Keycloak" Version="6.0.15" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="6.0.25" />
-    <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="6.0.26" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" />
+    <PackageReference Include="AspNet.Security.OAuth.GitHub" />
+    <PackageReference Include="AspNet.Security.OAuth.Keycloak" />
+    <PackageReference Include="AspNet.Security.OAuth.Weixin" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" />
   </ItemGroup>
 
   <ItemGroup>    
-    <ProjectReference Include="..\BotSharp.Core\BotSharp.Core.csproj" />
+    <ProjectReference Include="..\BotSharp.Core\BotSharp.Core.csproj" />    
+    <ProjectReference Include="..\BotSharp.Logger\BotSharp.Logger.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,19 +1,24 @@
-
 namespace BotSharp.Plugin.WebDriver.Drivers.PlaywrightDriver;
 
 public partial class PlaywrightWebDriver
 {
-    public async Task<string> ScreenshotAsync(string conversationId, string path)
+    public async Task<BrowserActionResult> ScreenshotAsync(MessageInfo message, string path)
     {
-        await _instance.Wait(conversationId);
-        var page = _instance.GetPage(conversationId);
-
-        await Task.Delay(500);
-        var bytes = await page.ScreenshotAsync(new PageScreenshotOptions
+        var result = new BrowserActionResult();
+        if (_webBrowsingSettings.IsEnableScreenshot)
         {
-            Path = path
-        });
+            await _instance.Wait(message.ContextId, waitNetworkIdle: false);
+            var page = _instance.GetPage(message.ContextId);
 
-        return "data:image/png;base64," + Convert.ToBase64String(bytes);
+            await Task.Delay(300);
+            var bytes = await page.ScreenshotAsync(new PageScreenshotOptions
+            {
+                Path = path,
+                FullPage = true
+            });
+            result.Body = "data:image/png;base64," + Convert.ToBase64String(bytes);
+        }
+        result.IsSuccess = true;
+        return result;
     }
 }

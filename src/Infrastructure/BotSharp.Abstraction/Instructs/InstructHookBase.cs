@@ -8,11 +8,16 @@ public class InstructHookBase : IInstructHook
 
     public virtual async Task BeforeCompletion(Agent agent, RoleDialogModel message)
     {
-        return;
+        await Task.CompletedTask;
     }
 
     public virtual async Task AfterCompletion(Agent agent, InstructResult result)
     {
-        return;
+        await Task.CompletedTask;
+    }
+
+    public virtual async Task OnResponseGenerated(InstructResponseModel response)
+    {
+        await Task.CompletedTask;
     }
 }

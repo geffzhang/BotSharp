@@ -19,7 +19,7 @@ public abstract class AgentHookBase : IAgentHook
         _settings = settings;
     }
 
-    public void SetAget(Agent agent)
+    public void SetAgent(Agent agent)
     {
         _agent = agent;
     }
@@ -34,6 +34,8 @@ public abstract class AgentHookBase : IAgentHook
         dict["current_date"] = $"{DateTime.Now:MMM dd, yyyy}";
         dict["current_time"] = $"{DateTime.Now:hh:mm tt}";
         dict["current_weekday"] = $"{DateTime.Now:dddd}";
+        dict["current_utc_datetime"] = $"{DateTime.UtcNow}";
+
         return true;
     }
 
@@ -49,7 +51,17 @@ public abstract class AgentHookBase : IAgentHook
         return true;
     }
 
-    public virtual void  OnAgentLoaded(Agent agent)
+    public virtual void OnAgentLoaded(Agent agent)
     {
+    }
+
+    public virtual void OnAgentUtilityLoaded(Agent agent)
+    {
+
+    }
+
+    public virtual void OnAgentMcpToolLoaded(Agent agent)
+    {
+
     }
 }

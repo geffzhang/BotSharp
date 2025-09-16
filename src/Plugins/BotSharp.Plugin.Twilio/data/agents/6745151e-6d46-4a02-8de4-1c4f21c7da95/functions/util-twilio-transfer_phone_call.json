@@ -1,0 +1,26 @@
+{
+  "name": "util-twilio-transfer_phone_call",
+  "description": "When user wants to transfer the phone call",
+  "visibility_expression": "{% if states.channel == 'phone' %}visible{% endif %}",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "transition_message": {
+        "type": "string",
+        "description": "Transition message when forwarding."
+      },
+      "phone_number": {
+        "type": "string",
+        "description": "Phone number transfer to."
+      },
+      "transfer_required_by_user": {
+        "type": "boolean",
+        "description": "Only set to true if the user initially and directly asks for a representative, otherwise false."
+      }
+    },
+    "required": [
+      "transition_message",
+      "phone_number"
+    ]
+  }
+}

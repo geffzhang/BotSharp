@@ -2,7 +2,7 @@ namespace BotSharp.Abstraction.Conversations.Settings;
 
 public class ConversationSetting
 {
-    public string DataDir { get; set; }
+    public string DataDir { get; set; } = "conversations";
     public string ChatCompletion { get; set; }
     public bool EnableKnowledgeBase { get; set; }
     public bool ShowVerboseLog { get; set; }
@@ -11,7 +11,9 @@ public class ConversationSetting
     public bool EnableExecutionLog { get; set; }
     public bool EnableContentLog { get; set; }
     public bool EnableStateLog { get; set; }
-    public CleanConversationSetting CleanSetting { get; set; }
+    public bool EnableTranslationMemory { get; set; }
+    public CleanConversationSetting CleanSetting { get; set; } = new();
+    public RateLimitSetting RateLimit { get; set; } = new();
 }
 
 public class CleanConversationSetting
@@ -20,5 +22,5 @@ public class CleanConversationSetting
     public int BatchSize { get; set; }
     public int MessageLimit { get; set; }
     public int BufferHours { get; set; }
-
+    public IEnumerable<string> ExcludeAgentIds { get; set; } = new List<string>();
 }

@@ -34,10 +34,11 @@ public class GetPizzaTypesFn : IFunctionCallback
             {
                 Id = states.GetConversationId()
             },
+            FillPostback = true,
             Message = new ButtonTemplateMessage
             {
                 Text = "Please select a pizza type",
-                Buttons = pizzaTypes.Select(x => new ButtonElement
+                Buttons = pizzaTypes.Select(x => new ElementButton
                 {
                     Type = "text",
                     Title = x,
@@ -45,7 +46,7 @@ public class GetPizzaTypesFn : IFunctionCallback
                 }).ToArray()
             }
         };
-            
+
         return true;
     }
 }
