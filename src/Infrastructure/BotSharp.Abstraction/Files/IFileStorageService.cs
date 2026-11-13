@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Files.Options;
 using System.IO;
 
 namespace BotSharp.Abstraction.Files;
@@ -19,24 +20,22 @@ public interface IFileStorageService
 
     #region Conversation
     /// <summary>
-    /// Get the message file screenshots for specific content types, e.g., pdf
+    /// Get the message file screenshots for pdf
     /// </summary>
     /// <param name="conversationId"></param>
     /// <param name="messageIds"></param>
     /// <returns></returns>
-    Task<IEnumerable<MessageFileModel>> GetMessageFileScreenshotsAsync(string conversationId, IEnumerable<string> messageIds);
+    Task<IEnumerable<MessageFileModel>> GetMessageFileScreenshotsAsync(string conversationId, IEnumerable<string> messageIds, MessageFileScreenshotOptions options);
 
     /// <summary>
     /// Get the files that have been uploaded in the chat. No screenshot images are included.
     /// </summary>
     /// <param name="conversationId"></param>
     /// <param name="messageIds"></param>
-    /// <param name="source"></param>
-    /// <param name="imageOnly"></param>
+    /// <param name="options"></param>
     /// <returns></returns>
-    IEnumerable<MessageFileModel> GetMessageFiles(string conversationId, IEnumerable<string> messageIds, string source, IEnumerable<string>? contentTypes = null);
+    IEnumerable<MessageFileModel> GetMessageFiles(string conversationId, IEnumerable<string> messageIds, MessageFileOptions? options = null);
     string GetMessageFile(string conversationId, string messageId, string source, string index, string fileName);
-    IEnumerable<MessageFileModel> GetMessagesWithFile(string conversationId, IEnumerable<string> messageIds);
     bool SaveMessageFiles(string conversationId, string messageId, string source, List<FileDataModel> files);
 
     /// <summary>
@@ -53,8 +52,8 @@ public interface IFileStorageService
 
 
     #region User
-    string GetUserAvatar();
-    bool SaveUserAvatar(FileDataModel file);
+    Task<string> GetUserAvatar();
+    Task<bool> SaveUserAvatar(FileDataModel file);
     #endregion
 
     #region Speech
@@ -63,17 +62,9 @@ public interface IFileStorageService
     #endregion
 
     #region Knowledge
-    bool SaveKnowledgeBaseFile(string collectionName, string vectorStoreProvider, Guid fileId, string fileName, BinaryData fileData);
-
-    /// <summary>
-    /// Delete files in a knowledge collection, given the vector store provider. If "fileId" is null, delete all files in the collection.
-    /// </summary>
-    /// <param name="collectionName"></param>
-    /// <param name="vectorStoreProvider"></param>
-    /// <param name="fileId"></param>
-    /// <returns></returns>
-    bool DeleteKnowledgeFile(string collectionName, string vectorStoreProvider, Guid? fileId = null);
-    string GetKnowledgeBaseFileUrl(string collectionName, string vectorStoreProvider, Guid fileId, string fileName);
-    BinaryData GetKnowledgeBaseFileBinaryData(string collectionName, string vectorStoreProvider, Guid fileId, string fileName);
+    bool SaveKnowledgeBaseFile(string collectionName, string knowledgebaseProvider, Guid fileId, string fileName, BinaryData fileData);
+    bool DeleteKnowledgeFile(string collectionName, string knowledgebaseProvider, Guid? fileId = null);
+    string GetKnowledgeBaseFileUrl(string collectionName, string knowledgebaseProvider, Guid fileId, string fileName);
+    BinaryData GetKnowledgeBaseFileBinaryData(string collectionName, string knowledgebaseProvider, Guid fileId, string fileName);
     #endregion
 }

@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Agents;
 using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Agents.Models;
@@ -64,8 +65,8 @@ public sealed class MicrosoftExtensionsAIChatCompletionProvider : IChatCompletio
         var state = _services.GetRequiredService<IConversationStateService>();
         var options = new ChatOptions()
         {
-            Temperature = float.Parse(state.GetState("temperature", "0.0")),
-            MaxOutputTokens = int.Parse(state.GetState("max_tokens", "1024"))
+            Temperature = state.GetState(LlmStateConst.TEMPERATURE, 0.0f),
+            MaxOutputTokens = state.GetState(LlmStateConst.MAX_TOKENS, 1024)
         };
 
         // Configure messages
@@ -73,7 +74,8 @@ public sealed class MicrosoftExtensionsAIChatCompletionProvider : IChatCompletio
         var agentService = _services.GetRequiredService<IAgentService>();
 
         // Prepare instruction and functions
-        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent);
+        var renderData = agentService.CollectRenderData(agent);
+        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent, renderData);
         if (!string.IsNullOrWhiteSpace(instruction))
         {
             renderedInstructions.Add(instruction);
@@ -82,9 +84,9 @@ public sealed class MicrosoftExtensionsAIChatCompletionProvider : IChatCompletio
 
         foreach (var function in functions)
         {
-            if (agentService.RenderFunction(agent, function))
+            if (agentService.RenderFunction(agent, function, renderData))
             {
-                var property = agentService.RenderFunctionProperty(agent, function);
+                var property = agentService.RenderFunctionProperty(agent, function, renderData);
                 (options.Tools ??= []).Add(new NopAIFunction(function.Name, function.Description, JsonSerializer.SerializeToElement(property)));
             }
         }
@@ -108,16 +110,16 @@ public sealed class MicrosoftExtensionsAIChatCompletionProvider : IChatCompletio
                 messages.Add(new(ChatRole.Assistant,
                 [
                     new FunctionCallContent(x.FunctionName, x.FunctionName, JsonSerializer.Deserialize<Dictionary<string, object?>>(x.FunctionArgs ?? "{}")),
-                    new FunctionResultContent(x.FunctionName, x.Content)
+                    new FunctionResultContent(x.FunctionName, x.LlmContent)
                 ]));
             }
             else if (x.Role == AgentRole.System || x.Role == AgentRole.Assistant)
             {
-                messages.Add(new(x.Role == AgentRole.System ? ChatRole.System : ChatRole.Assistant, x.Content));
+                messages.Add(new(x.Role == AgentRole.System ? ChatRole.System : ChatRole.Assistant, x.LlmContent));
             }
             else if (x.Role == AgentRole.User)
             {
-                List<AIContent> contents = [new TextContent(!string.IsNullOrWhiteSpace(x.Payload) ? x.Payload : x.Content)];
+                List<AIContent> contents = [new TextContent(x.LlmContent)];
                 if (allowMultiModal)
                 {
                     foreach (var file in x.Files)

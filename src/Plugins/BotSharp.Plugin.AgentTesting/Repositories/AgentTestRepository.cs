@@ -1,0 +1,247 @@
+using MongoDB.Driver;
+
+namespace BotSharp.Plugin.AgentTesting.Repositories;
+
+/// <summary>
+/// The Mongo repository contract for this plugin's four document types (Suite/Case/Run/CaseResult).
+/// The signatures -- in particular which parameters are string? rather than string -- match the
+/// InMemoryRepo fake used by the tests, which is the specification this interface follows.
+/// </summary>
+public interface IAgentTestRepository
+{
+    Task<AgentTestSuite?> GetSuiteAsync(string id);
+    Task<List<AgentTestSuite>> ListSuitesAsync(string? agentId);
+    Task UpsertSuiteAsync(AgentTestSuite suite);
+    Task DeleteSuiteAsync(string id);
+
+    Task<AgentTestCase?> GetCaseAsync(string id);
+    Task<List<AgentTestCase>> ListCasesAsync(string suiteId);
+    Task UpsertCaseAsync(AgentTestCase testCase);
+    Task DeleteCaseAsync(string id);
+
+    Task<AgentTestRun> CreateRunAsync(AgentTestRun run);
+    Task<AgentTestRun?> GetRunAsync(string id);
+    Task<List<AgentTestRun>> ListRunsAsync(string? suiteId);
+
+    /// <summary>
+    /// Whole-document replace that never reverts CancelRequested: if a cancel landed after
+    /// <paramref name="run"/> was read, the write keeps it and sets it on <paramref name="run"/>.
+    /// Stamps UpdateDate.
+    /// </summary>
+    Task UpdateRunAsync(AgentTestRun run);
+
+    /// <summary>
+    /// Sets CancelRequested on a Pending or Running run and touches no other field. False when the
+    /// run does not exist or has already finished.
+    /// </summary>
+    Task<bool> RequestRunCancelAsync(string id);
+
+    /// <summary>
+    /// Stamps UpdateDate on a Running run and touches no other field. False when the run is gone or
+    /// no longer Running.
+    /// </summary>
+    Task<bool> TouchRunAsync(string id);
+
+    /// <summary>
+    /// Marks a Running run Error only while its UpdateDate still equals
+    /// <paramref name="observedUpdateDate"/>, setting just Status, Error and CompletedAt. False when
+    /// the executor wrote anything since it was observed, so a stale copy never overwrites newer
+    /// progress or a terminal status.
+    /// </summary>
+    Task<bool> TryAbandonRunAsync(string id, DateTime? observedUpdateDate, string error);
+
+    /// <summary>
+    /// Removes a run and every case result belonging to it, and reports how many results went with
+    /// it.
+    ///
+    /// The cascade is the point. Case results are keyed by run id and are reachable no other way, so
+    /// deleting the run alone would leave rows nothing can ever list, read or clean up again -- and
+    /// every later aggregate that scans results would keep counting them.
+    /// </summary>
+    Task<long> DeleteRunAsync(string id);
+
+    Task AddCaseResultAsync(AgentTestCaseResult result);
+    Task<List<AgentTestCaseResult>> ListCaseResultsAsync(string runId);
+}
+
+public class AgentTestRepository : IAgentTestRepository
+{
+    private readonly AgentTestMongoDbContext _mongoDbContext;
+
+    public AgentTestRepository(AgentTestMongoDbContext mongoDbContext)
+    {
+        _mongoDbContext = mongoDbContext;
+    }
+
+    public async Task<AgentTestSuite?> GetSuiteAsync(string id)
+        => await _mongoDbContext.AgentTestSuites.Find(x => x.Id == id).FirstOrDefaultAsync();
+
+    public async Task<List<AgentTestSuite>> ListSuitesAsync(string? agentId)
+    {
+        var filter = string.IsNullOrWhiteSpace(agentId)
+            ? Builders<AgentTestSuite>.Filter.Empty
+            : Builders<AgentTestSuite>.Filter.Eq(x => x.AgentId, agentId);
+
+        return await _mongoDbContext.AgentTestSuites
+            .Find(filter)
+            .SortByDescending(x => x.CreateDate)
+            .ToListAsync();
+    }
+
+    public async Task UpsertSuiteAsync(AgentTestSuite suite)
+    {
+        // ReplaceOneAsync(upsert:true) does not run the [BsonId(IdGenerator=...)] hook the way
+        // InsertOneAsync does -- a brand-new document with a null/empty Id must get a real one
+        // here, or the driver would send an upsert whose replacement document has no _id at all
+        // (see the same fix already applied in UnableToValidateJobMongoRepository.UpsertAsync).
+        if (string.IsNullOrEmpty(suite.Id))
+        {
+            suite.Id = Guid.NewGuid().ToString();
+        }
+
+        suite.UpdateDate = DateTime.UtcNow;
+
+        await _mongoDbContext.AgentTestSuites.ReplaceOneAsync(
+            x => x.Id == suite.Id,
+            suite,
+            new ReplaceOptions { IsUpsert = true });
+    }
+
+    public async Task DeleteSuiteAsync(string id)
+        => await _mongoDbContext.AgentTestSuites.DeleteOneAsync(x => x.Id == id);
+
+    public async Task<AgentTestCase?> GetCaseAsync(string id)
+        => await _mongoDbContext.AgentTestCases.Find(x => x.Id == id).FirstOrDefaultAsync();
+
+    public async Task<List<AgentTestCase>> ListCasesAsync(string suiteId)
+        => await _mongoDbContext.AgentTestCases
+            .Find(x => x.SuiteId == suiteId)
+            .SortByDescending(x => x.CreateDate)
+            .ToListAsync();
+
+    public async Task UpsertCaseAsync(AgentTestCase testCase)
+    {
+        if (string.IsNullOrEmpty(testCase.Id))
+        {
+            testCase.Id = Guid.NewGuid().ToString();
+        }
+
+        testCase.UpdateDate = DateTime.UtcNow;
+
+        await _mongoDbContext.AgentTestCases.ReplaceOneAsync(
+            x => x.Id == testCase.Id,
+            testCase,
+            new ReplaceOptions { IsUpsert = true });
+    }
+
+    public async Task DeleteCaseAsync(string id)
+        => await _mongoDbContext.AgentTestCases.DeleteOneAsync(x => x.Id == id);
+
+    public async Task<AgentTestRun> CreateRunAsync(AgentTestRun run)
+    {
+        // InsertOneAsync DOES run the StringGuidIdGenerator hook for a null/empty Id, unlike the
+        // upsert path above -- but setting it explicitly here as well costs nothing and means the
+        // caller (the controller) can read back run.Id immediately after this call returns, before
+        // the insert has even happened, e.g. to log it.
+        if (string.IsNullOrEmpty(run.Id))
+        {
+            run.Id = Guid.NewGuid().ToString();
+        }
+
+        await _mongoDbContext.AgentTestRuns.InsertOneAsync(run);
+        return run;
+    }
+
+    public async Task<AgentTestRun?> GetRunAsync(string id)
+        => await _mongoDbContext.AgentTestRuns.Find(x => x.Id == id).FirstOrDefaultAsync();
+
+    public async Task<List<AgentTestRun>> ListRunsAsync(string? suiteId)
+    {
+        var filter = string.IsNullOrWhiteSpace(suiteId)
+            ? Builders<AgentTestRun>.Filter.Empty
+            : Builders<AgentTestRun>.Filter.Eq(x => x.SuiteId, suiteId);
+
+        return await _mongoDbContext.AgentTestRuns
+            .Find(filter)
+            .SortByDescending(x => x.CreateDate)
+            .ToListAsync();
+    }
+
+    public async Task UpdateRunAsync(AgentTestRun run)
+    {
+        run.UpdateDate = DateTime.UtcNow;
+
+        // CancelRequested is the one field written outside the executor, and it only ever goes
+        // false -> true. Replacing only while the stored flag still matches ours means a cancel that
+        // arrived after this copy was read is never overwritten; on a miss, carry it over and write.
+        var replaced = await _mongoDbContext.AgentTestRuns.ReplaceOneAsync(
+            x => x.Id == run.Id && x.CancelRequested == run.CancelRequested, run);
+
+        if (replaced.MatchedCount == 0 && !run.CancelRequested)
+        {
+            run.CancelRequested = true;
+            await _mongoDbContext.AgentTestRuns.ReplaceOneAsync(x => x.Id == run.Id, run);
+        }
+    }
+
+    public async Task<bool> RequestRunCancelAsync(string id)
+    {
+        var updated = await _mongoDbContext.AgentTestRuns.UpdateOneAsync(
+            x => x.Id == id && (x.Status == AgentTestStatus.Pending || x.Status == AgentTestStatus.Running),
+            Builders<AgentTestRun>.Update.Set(x => x.CancelRequested, true));
+        return updated.MatchedCount > 0;
+    }
+
+    public async Task<bool> TouchRunAsync(string id)
+    {
+        var updated = await _mongoDbContext.AgentTestRuns.UpdateOneAsync(
+            x => x.Id == id && x.Status == AgentTestStatus.Running,
+            Builders<AgentTestRun>.Update.Set(x => x.UpdateDate, DateTime.UtcNow));
+        return updated.MatchedCount > 0;
+    }
+
+    public async Task<bool> TryAbandonRunAsync(string id, DateTime? observedUpdateDate, string error)
+    {
+        // observedUpdateDate was read back from this collection, so it carries the stored
+        // millisecond precision and compares equal. Null matches a run written before UpdateDate
+        // existed.
+        var updated = await _mongoDbContext.AgentTestRuns.UpdateOneAsync(
+            x => x.Id == id && x.Status == AgentTestStatus.Running && x.UpdateDate == observedUpdateDate,
+            Builders<AgentTestRun>.Update
+                .Set(x => x.Status, AgentTestStatus.Error)
+                .Set(x => x.Error, error)
+                .Set(x => x.CompletedAt, DateTime.UtcNow));
+        return updated.MatchedCount > 0;
+    }
+
+    public async Task<long> DeleteRunAsync(string id)
+    {
+        // Results first. If the process dies between the two deletes, an orphaned RUN is visible and
+        // deletable again; orphaned RESULTS are not reachable at all once their run is gone. Losing
+        // the recoverable half is the better failure.
+        var results = await _mongoDbContext.AgentTestCaseResults.DeleteManyAsync(x => x.RunId == id);
+        await _mongoDbContext.AgentTestRuns.DeleteOneAsync(x => x.Id == id);
+        return results.DeletedCount;
+    }
+
+    public async Task AddCaseResultAsync(AgentTestCaseResult result)
+    {
+        if (string.IsNullOrEmpty(result.Id))
+        {
+            result.Id = Guid.NewGuid().ToString();
+        }
+
+        await _mongoDbContext.AgentTestCaseResults.InsertOneAsync(result);
+    }
+
+    public async Task<List<AgentTestCaseResult>> ListCaseResultsAsync(string runId)
+        // Ascending, deliberately unlike every other List*Async method in this file: those are
+        // "list of independent rows for an admin screen," newest-first. This one is "the case
+        // results FOR ONE RUN," where the natural read order is execution order -- newest-first
+        // would show a run's cases back-to-front, and ties within the same millisecond would sort
+        // nondeterministically either way.
+        => await _mongoDbContext.AgentTestCaseResults
+            .Find(x => x.RunId == runId)
+            .SortBy(x => x.CreateDate)
+            .ToListAsync();
+}

@@ -1,8 +1,9 @@
-using BotSharp.Abstraction.Conversations.Dtos;
+﻿using BotSharp.Abstraction.Conversations.Dtos;
 using BotSharp.Abstraction.Conversations.Enums;
 using BotSharp.Abstraction.MessageHub.Models;
 using BotSharp.Abstraction.MessageHub.Observers;
 using BotSharp.Abstraction.SideCar;
+using BotSharp.Core.MessageHub.Observers;
 using System.Runtime.CompilerServices;
 
 namespace BotSharp.Plugin.ChatHub.Observers;
@@ -79,6 +80,8 @@ public class ChatHubObserver : BotSharpObserverBase<HubObserveData<RoleDialogMod
                     Function = message.FunctionName,
                     RichContent = message.SecondaryRichContent ?? message.RichContent,
                     Data = message.Data,
+                    Thought = message.Thought,
+                    MetaData = message.MetaData,
                     Sender = new()
                     {
                         FirstName = "AI",
@@ -117,9 +120,28 @@ public class ChatHubObserver : BotSharpObserverBase<HubObserveData<RoleDialogMod
                     }
                 };
 
-#if DEBUG
-                _logger.LogCritical($"Receiving {value.EventName} ({value.Data.Indication}) in {nameof(ChatHubObserver)} - {conv.ConversationId}");
-#endif
+                _logger.LogDebug($"[{nameof(ChatHubObserver)}]: Receive {value.EventName} => {value.Data.Indication} ({conv.ConversationId})");
+
+                break;
+            case ChatEvent.OnIntermediateMessageReceivedFromAssistant:
+                if (!AllowSendingMessage()) return;
+
+                model = new ChatResponseDto
+                {
+                    ConversationId = conv.ConversationId,
+                    MessageId = message.MessageId,
+                    MessageLabel = message.MessageLabel,
+                    Text = !string.IsNullOrEmpty(message.SecondaryContent) ? message.SecondaryContent : message.Content,
+                    Function = message.FunctionName,
+                    RichContent = message.SecondaryRichContent ?? message.RichContent,
+                    Data = message.Data,
+                    Sender = new()
+                    {
+                        FirstName = "AI",
+                        LastName = "Assistant",
+                        Role = AgentRole.Assistant
+                    }
+                };
                 break;
         }
 
@@ -137,8 +159,12 @@ public class ChatHubObserver : BotSharpObserverBase<HubObserveData<RoleDialogMod
     {
         var user = _services.GetRequiredService<IUserIdentity>();
         var json = JsonSerializer.Serialize(data, _options.JsonSerializerOptions);
-        EventEmitter.SendChatEvent(_services, _logger, @event, conversationId, user?.Id, json, nameof(ChatHubObserver), callerName)
-                     .ConfigureAwait(false).GetAwaiter().GetResult();
+
+        // NOT awaited, and it does not need to be: SendChatEvent queues the event and returns.
+        // This method is called from OnNext, on whatever thread pushed to the MessageHub — for a
+        // tool's progress notifications, the MCP client's own read loop — so anything that waited
+        // here for a socket could stop that thread, and did. See ChatEventDispatcher.
+        _ = EventEmitter.SendChatEvent(_services, _logger, @event, conversationId, user?.Id, json, nameof(ChatHubObserver), callerName);
     }
     #endregion
 }

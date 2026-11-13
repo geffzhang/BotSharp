@@ -14,10 +14,8 @@
   limitations under the License.
 ******************************************************************************/
 
+using BotSharp.Abstraction.Repositories.Filters;
 using BotSharp.Core.Infrastructures;
-using NetTopologySuite.Index.KdTree;
-using Newtonsoft.Json.Linq;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace BotSharp.Core.SideCar.Services;
 
@@ -43,7 +41,7 @@ public class BotSharpConversationSideCar : IConversationSideCar
         _logger = logger;
     }
 
-    public void AppendConversationDialogs(string conversationId, List<DialogElement> messages)
+    public async Task AppendConversationDialogs(string conversationId, List<DialogElement> messages)
     {
         if (!IsValid(conversationId))
         {
@@ -52,19 +50,27 @@ public class BotSharpConversationSideCar : IConversationSideCar
 
         var top = _contextStack.Peek();
         top.Dialogs.AddRange(messages);
+
+        await Task.CompletedTask;
     }
 
-    public List<DialogElement> GetConversationDialogs(string conversationId)
+    public async Task<List<DialogElement>> GetConversationDialogs(string conversationId, ConversationDialogFilter? filter = null)
     {
         if (!IsValid(conversationId))
         {
-            return new List<DialogElement>();
+            return [];
         }
 
-        return _contextStack.Peek().Dialogs;
+        var dialogs = _contextStack.Peek().Dialogs ?? [];
+        if (filter?.Order == "desc")
+        {
+            dialogs = dialogs.OrderByDescending(x => x.MetaData?.CreatedTime).ToList();
+        }
+
+        return await Task.FromResult(dialogs);
     }
 
-    public void UpdateConversationBreakpoint(string conversationId, ConversationBreakpoint breakpoint)
+    public async Task UpdateConversationBreakpoint(string conversationId, ConversationBreakpoint breakpoint)
     {
         if (!IsValid(conversationId))
         {
@@ -73,9 +79,11 @@ public class BotSharpConversationSideCar : IConversationSideCar
 
         var top = _contextStack.Peek().Breakpoints;
         top.Add(breakpoint);
+
+        await Task.CompletedTask;
     }
 
-    public ConversationBreakpoint? GetConversationBreakpoint(string conversationId)
+    public async Task<ConversationBreakpoint?> GetConversationBreakpoint(string conversationId)
     {
         if (!IsValid(conversationId))
         {
@@ -83,10 +91,10 @@ public class BotSharpConversationSideCar : IConversationSideCar
         }
 
         var top = _contextStack.Peek().Breakpoints;
-        return top.LastOrDefault();
+        return await Task.FromResult(top.LastOrDefault());
     }
 
-    public void UpdateConversationStates(string conversationId, List<StateKeyValue> states)
+    public async Task UpdateConversationStates(string conversationId, List<StateKeyValue> states)
     {
         if (!IsValid(conversationId))
         {
@@ -95,6 +103,8 @@ public class BotSharpConversationSideCar : IConversationSideCar
 
         var top = _contextStack.Peek();
         top.State = new ConversationState(states);
+
+        await Task.CompletedTask;
     }
 
     public async Task<RoleDialogModel> SendMessage(

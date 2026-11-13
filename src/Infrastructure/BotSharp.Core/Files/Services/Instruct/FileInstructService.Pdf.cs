@@ -1,6 +1,8 @@
 using BotSharp.Abstraction.Files.Converters;
-using BotSharp.Abstraction.Instructs.Models;
 using BotSharp.Abstraction.Instructs;
+using BotSharp.Abstraction.Instructs.Models;
+using BotSharp.Abstraction.Instructs.Options;
+using BotSharp.Abstraction.MLTasks;
 
 namespace BotSharp.Core.Files.Services;
 
@@ -22,24 +24,33 @@ public partial class FileInstructService
         try
         {
             var provider = options?.Provider ?? "openai";
-            var pdfFiles = await DownloadAndSaveFiles(sessionDir, files);
+            var model = options?.Model ?? "gpt-5-mini";
 
+            var pdfFiles = await DownloadAndSaveFiles(sessionDir, files);
             var targetFiles = pdfFiles;
-            if (provider != "google-ai")
+
+            var settingsService = _services.GetRequiredService<ILlmProviderService>();
+            var modelSettings = settingsService.GetSetting(provider, model);
+            var converter = GetImageConverter(options?.ImageConverter);
+            
+            if (converter == null && modelSettings?.AllowPdfReading != true)
             {
-                targetFiles = await ConvertPdfToImages(pdfFiles);
+                var fileCoreSettings = _services.GetRequiredService<FileCoreSettings>();
+                converter = GetImageConverter(fileCoreSettings?.ImageConverter?.Provider);
             }
 
+            targetFiles = await ConvertPdfToImages(converter, pdfFiles);
             if (targetFiles.IsNullOrEmpty())
             {
                 return content;
             }
 
             var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
-            var instruction = await GetAgentTemplate(innerAgentId, options?.TemplateName);
+            var instruction = await RenderAgentTemplate(innerAgentId, options?.TemplateName, options?.Data);
+            text = RenderText(text, options?.Data);
 
             var completion = CompletionProvider.GetChatCompletion(_services, provider: provider,
-                model: options?.Model ?? "gpt-4o", multiModal: true);
+                model: model, multiModal: true);
             var message = await completion.GetChatCompletions(new Agent()
             {
                 Id = innerAgentId,
@@ -116,14 +127,12 @@ public partial class FileInstructService
         return locs;
     }
 
-    private async Task<IEnumerable<string>> ConvertPdfToImages(IEnumerable<string> files)
+    private async Task<IEnumerable<string>> ConvertPdfToImages(IImageConverter converter, IEnumerable<string> files)
     {
         var images = new List<string>();
-        var settings = _services.GetRequiredService<FileCoreSettings>();
-        var converter = _services.GetServices<IPdf2ImageConverter>().FirstOrDefault(x => x.Provider == settings.Pdf2ImageConverter.Provider);
         if (converter == null || files.IsNullOrEmpty())
         {
-            return images;
+            return files;
         }
 
         foreach (var file in files)

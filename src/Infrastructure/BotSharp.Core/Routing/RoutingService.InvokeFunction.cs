@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Routing.Executor;
 using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Core.MessageHub;
 using BotSharp.Core.Routing.Executor;
@@ -13,28 +14,22 @@ public partial class RoutingService
         var agentService = _services.GetRequiredService<IAgentService>();
         var agent = await agentService.GetAgent(currentAgentId);
 
-        var funcExecutor = FunctionExecutorFactory.Create(_services, name, agent);
+        var funcExecutor = _services.GetRequiredService<IFunctionExecutorFactory>().Create(name, agent);
         if (funcExecutor == null)
         {
             message.StopCompletion = true;
             message.Content = $"Can't find function implementation of {name}.";
-            _logger.LogError(message.Content);
+            _logger.LogError($"{message.Content}, stackInfo:{DiagnosticHelper.GetCurrentStackTrace()}");
             return false;
         }
 
         // Clone message
         var clonedMessage = RoleDialogModel.From(message);
         clonedMessage.FunctionName = name;
+        // Assigned even when empty: the hooks below log this field, and the value From() copied
+        // would otherwise linger there.
         clonedMessage.Indication = await funcExecutor.GetIndicatorAsync(message);
-
-        var conv = _services.GetRequiredService<IConversationService>();
-        var messageHub = _services.GetRequiredService<MessageHub<HubObserveData<RoleDialogModel>>>();
-        messageHub.Push(new()
-        {
-            EventName = ChatEvent.OnIndicationReceived,
-            Data = clonedMessage,
-            RefId = conv.ConversationId
-        });
+        _services.GetHub().PushIndication(clonedMessage, clonedMessage.Indication);
 
         var hooks = _services.GetHooksOrderByPriority<IConversationHook>(clonedMessage.CurrentAgentId);
         foreach (var hook in hooks)
@@ -43,16 +38,31 @@ public partial class RoutingService
             await hook.OnFunctionExecuting(clonedMessage, options);
         }
 
+        // Already pushed and logged: clear it so nested calls resolve their own indication
+        // instead of inheriting this one through GetIndication's `message.Indication ??` fallback.
+        clonedMessage.Indication = null;
+
         bool result = false;
 
         try
         {
-            result = await funcExecutor.ExecuteAsync(clonedMessage);
-
-            // After functions have been executed
-            foreach (var hook in hooks)
+            // A before-hook may REFUSE the call outright by setting Handled, which is what that
+            // flag has always been documented to mean on RoleDialogModel — it was simply never
+            // read here, so a hook that decided a tool must not run watched it run anyway.
+            //
+            // The refusal's own words are already on the cloned message and are copied back below
+            // as the tool's result, so the model reads why it was refused rather than a silent
+            // no-op. The executed-hooks are skipped with the execution: they exist to react to
+            // what a tool DID, and a call that never happened did nothing for them to record.
+            if (!clonedMessage.Handled)
             {
-                await hook.OnFunctionExecuted(clonedMessage, options);
+                result = await funcExecutor.ExecuteAsync(clonedMessage);
+
+                // After functions have been executed
+                foreach (var hook in hooks)
+                {
+                    await hook.OnFunctionExecuted(clonedMessage, options);
+                }
             }
 
             // Set result to original message
@@ -66,7 +76,7 @@ public partial class RoutingService
             message.RichContent = clonedMessage.RichContent;
             message.Data = clonedMessage.Data;
             message.MessageLabel = clonedMessage.MessageLabel;
-            message.AdditionalMessageWrapper = clonedMessage.AdditionalMessageWrapper;
+            message.Handled = clonedMessage.Handled;
         }
         catch (JsonException ex)
         {

@@ -6,7 +6,6 @@ using BotSharp.Abstraction.Settings;
 using BotSharp.Abstraction.Options;
 using BotSharp.Abstraction.Messaging.JsonConverters;
 using BotSharp.Abstraction.Users.Settings;
-using BotSharp.Abstraction.Interpreters.Settings;
 using BotSharp.Abstraction.Infrastructures;
 using BotSharp.Core.Processors;
 using StackExchange.Redis;
@@ -24,13 +23,10 @@ public static class BotSharpCoreExtensions
 {
     public static IServiceCollection AddBotSharpCore(this IServiceCollection services, IConfiguration config, Action<BotSharpOptions>? configOptions = null)
     {
-        var interpreterSettings = new InterpreterSettings();
-        config.Bind("Interpreter", interpreterSettings);
-        services.AddSingleton(x => interpreterSettings);
-
         services.AddSingleton<IDistributedLocker, DistributedLocker>();
         // Register template render
-        services.AddSingleton<ITemplateRender, TemplateRender>();
+        services.AddSingleton<IRenderConfiguration, RenderConfiguration>();
+        services.AddScoped<ITemplateRender, TemplateRender>();
 
         services.AddScoped<ISettingService, SettingService>();
         services.AddScoped<IRoleService, RoleService>();
@@ -54,6 +50,14 @@ public static class BotSharpCoreExtensions
         config.Bind("SharpCache", cacheSettings);
         services.AddSingleton(x => cacheSettings);
 
+        var dbSettings = new BotSharpDatabaseSettings();
+        config.Bind("Database", dbSettings);
+
+        if (!string.IsNullOrEmpty(dbSettings.Redis))
+        {
+            services.AddSingleton<RedisCacheService>();
+        }
+        
         services.AddSingleton<ICacheService>(sp => cacheSettings.CacheType switch
         {
             CacheType.RedisCache => ActivatorUtilities.CreateInstance<RedisCacheService>(sp),

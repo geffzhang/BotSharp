@@ -39,7 +39,7 @@ public partial class AgentService
             try
             {
                 var agentJson = File.ReadAllText(Path.Combine(dir, "agent.json"));
-                var agent = JsonSerializer.Deserialize<Agent>(agentJson, _options);
+                var agent = JsonSerializer.Deserialize<Agent>(agentJson, _options.JsonSerializerOptions);
                 
                 if (agent == null)
                 {
@@ -60,13 +60,22 @@ public partial class AgentService
                      .SetSamples(samples);
 
                 var tasks = GetTasksFromFile(dir);
+                var codeScripts = GetCodeScriptsFromFile(dir);
 
-                var isAgentDeleted = _db.DeleteAgent(agent.Id);
+                var isAgentDeleted = await _db.DeleteAgent(agent.Id, options: new()
+                {
+                    DeleteRoleAgents = false,
+                    DeleteUserAgents = false,
+                    ToDeleteCodeScripts = codeScripts
+                });
+
                 if (isAgentDeleted)
                 {
                     await Task.Delay(100);
-                    _db.BulkInsertAgents(new List<Agent> { agent });
-                    _db.BulkInsertAgentTasks(tasks);
+                    await _db.BulkInsertAgents([agent]);
+                    await _db.BulkInsertAgentTasks(agent.Id, tasks);
+                    await _db.BulkInsertAgentCodeScripts(agent.Id, codeScripts);
+
                     refreshedAgents.Add(agent.Name);
                     _logger.LogInformation($"Agent {agent.Name} has been migrated.");
                 }

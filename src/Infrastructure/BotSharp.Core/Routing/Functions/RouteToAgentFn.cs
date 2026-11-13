@@ -12,6 +12,11 @@ public partial class RouteToAgentFn : IFunctionCallback
     public string Name => "route_to_agent";
     private readonly IServiceProvider _services;
     private readonly IRoutingContext _context;
+#if DEBUG
+    public string Indication => "Routing to the specified AI agent...";
+#else
+    public string Indication => "Thinking...";
+#endif
 
     public RouteToAgentFn(IServiceProvider services, IRoutingContext context)
     {
@@ -28,37 +33,25 @@ public partial class RouteToAgentFn : IFunctionCallback
         if (!string.IsNullOrEmpty(args.OriginalAgent) && args.OriginalAgent.Length < 32)
         {
             // Correct user goal agent to keep orignal task
-            var goalAgentInState = states.GetState("user_goal_agent", string.Empty);
-            bool correctToOriginalAgent = false;
-            if (goalAgentInState == string.Empty)
+            var goalAgentInState = states.GetState(StateConst.USER_GOAL_AGENT, string.Empty);
+            if (args.OriginalAgent != goalAgentInState)
             {
-                states.SetState("user_goal_agent", args.OriginalAgent, isNeedVersion: true);
-            }
-            else if (args.OriginalAgent == args.AgentName && args.OriginalAgent != goalAgentInState)
-            {
-                // Correct to original agent
-                args.OriginalAgent = goalAgentInState;
-                correctToOriginalAgent = true;
-            }
-            else if (args.OriginalAgent != args.AgentName && args.OriginalAgent != goalAgentInState)
-            {
-                // Correct to original agent
-                states.SetState("user_goal_agent", args.OriginalAgent, isNeedVersion: true);
+                states.SetState(StateConst.USER_GOAL_AGENT, args.OriginalAgent, isNeedVersion: true);
             }
 
             var db = _services.GetRequiredService<IBotSharpRepository>();
             var filter = new AgentFilter { AgentNames = [args.OriginalAgent] };
-            var originalAgent = db.GetAgents(filter).FirstOrDefault();
+            var originalAgent = (await db.GetAgents(filter)).FirstOrDefault();
             if (originalAgent != null)
             {
-                _context.Push(originalAgent.Id, $"user goal agent{(correctToOriginalAgent ? " " + originalAgent.Name + " & is corrected" : "")}");
+                await _context.Push(originalAgent.Id, "user goal agent");
             }
         }
 
         // Push next action agent
         if (!string.IsNullOrEmpty(args.AgentName) && args.AgentName.Length < 32)
         {
-            _context.Push(args.AgentName, args.NextActionReason);
+            await _context.Push(args.AgentName, args.NextActionReason);
             states.SetState(StateConst.NEXT_ACTION_AGENT, args.AgentName, isNeedVersion: true);
         }
 
@@ -70,7 +63,7 @@ public partial class RouteToAgentFn : IFunctionCallback
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
             var filter = new AgentFilter { AgentNames = [args.AgentName] };
-            var targetAgent = db.GetAgents(filter).FirstOrDefault();
+            var targetAgent = (await db.GetAgents(filter)).FirstOrDefault();
             if (targetAgent == null)
             {
                 message.Data = JsonSerializer.Deserialize<JsonElement>(message.FunctionArgs);
@@ -83,11 +76,11 @@ public partial class RouteToAgentFn : IFunctionCallback
             }
 
             var routing = _services.GetRequiredService<IRoutingService>();
-            var (missingfield, reason) = routing.HasMissingRequiredField(message, out var agentId);
+            var (missingfield, reason, agentId) = await routing.HasMissingRequiredField(message);
             if (missingfield && message.CurrentAgentId != agentId)
             {
                 // Stack redirection agent
-                _context.Push(agentId, reason: $"REDIRECTION {reason}");
+                await _context.Push(agentId, reason: $"REDIRECTION {reason}");
                 message.Content = reason;
                 states.SetState(StateConst.AGENT_REDIRECTION_REASON, reason, isNeedVersion: false);
             }

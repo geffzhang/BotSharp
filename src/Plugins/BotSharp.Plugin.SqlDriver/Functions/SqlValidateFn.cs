@@ -1,3 +1,7 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
+using BotSharp.Abstraction.Instructs.Options;
+using BotSharp.Abstraction.Models;
+
 namespace BotSharp.Plugin.SqlDriver.Functions;
 
 public class SqlValidateFn : IFunctionCallback
@@ -29,7 +33,7 @@ public class SqlValidateFn : IFunctionCallback
         sql = Regex.Match(sql, pattern).Groups[1].Value;
         message.Content = sql;
 
-        var dbHook = _services.GetRequiredService<ISqlDriverHook>();
+        var dbHook = _services.GetRequiredService<IText2SqlHook>();
         var dbType = dbHook.GetDatabaseType(message);
         var validateSql = dbType.ToLower() switch
         {
@@ -49,19 +53,19 @@ public class SqlValidateFn : IFunctionCallback
 
         if (msgCopy.Data != null && msgCopy.Data is DbException ex)
         {
-            
+            var settingService = _services.GetRequiredService<ISettingService>();
             var instructService = _services.GetRequiredService<IInstructService>();
             var agentService = _services.GetRequiredService<IAgentService>();
             var states = _services.GetRequiredService<IConversationStateService>();
 
             var query = "Correct SQL Statement and keep the comments/explanations";
-            var ddl = states.GetState("table_ddls");
+            var ddl = states.GetState(DataStateConst.TABLE_DDLS);
 
             var correctedSql = await instructService.Instruct<string>(query,
                 new InstructOptions
                 {
                     Provider = "openai",
-                    Model = "gpt-4o",
+                    Model = Gpt4xModelConstants.GPT_4o,
                     AgentId = BuiltInAgentId.SqlDriver,
                     TemplateName = "sql_statement_correctness",
                     Data = new Dictionary<string, object>

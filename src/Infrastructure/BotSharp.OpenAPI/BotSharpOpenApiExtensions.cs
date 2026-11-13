@@ -1,18 +1,27 @@
 using BotSharp.Abstraction.Messaging.JsonConverters;
+using BotSharp.Core.MCP.Settings;
 using BotSharp.Core.Users.Services;
+using BotSharp.OpenAPI.Hooks;
+using BotSharp.OpenAPI.RuleTriggers;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Net.Http.Headers;
-using Microsoft.OpenApi.Models;
-using Microsoft.IdentityModel.JsonWebTokens;
-using BotSharp.OpenAPI.BackgroundServices;
+using Microsoft.OpenApi;
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Authentication;
+using BotSharp.Abstraction.Crontab;
+using BotSharp.Abstraction.Rules;
+
+
+#if NET8_0
+using Microsoft.OpenApi.Models;
+#endif
 
 namespace BotSharp.OpenAPI;
 
@@ -32,7 +41,8 @@ public static class BotSharpOpenApiExtensions
         bool enableValidation)
     {
         services.AddScoped<IUserIdentity, UserIdentity>();
-        services.AddHostedService<ConversationTimeoutService>();
+        
+        services.AddCrontabServices();
 
         // Add bearer authentication
         var schema = "MIXED_SCHEME";
@@ -96,6 +106,10 @@ public static class BotSharpOpenApiExtensions
                 options.ClientId = config["OAuth:GitHub:ClientId"];
                 options.ClientSecret = config["OAuth:GitHub:ClientSecret"];
                 options.Events.OnTicketReceived = OnTicketReceivedContext;
+
+                // Add the scope for user email for GitHub OAuth
+                // Have to add this scope to get user email when using invite link
+                options.Scope.Add("user:email");
             });
         }
 
@@ -164,6 +178,7 @@ public static class BotSharpOpenApiExtensions
                     Name = "Authorization",
                     Type = SecuritySchemeType.ApiKey
                 });
+#if NET8_0
                 c.AddSecurityRequirement(new OpenApiSecurityRequirement {
                    {
                      new OpenApiSecurityScheme
@@ -177,8 +192,18 @@ public static class BotSharpOpenApiExtensions
                       Array.Empty<string>()
                    }
                 });
+#elif NET10_0
+                c.AddSecurityRequirement(x => new OpenApiSecurityRequirement
+                {
+                   {
+                     new OpenApiSecuritySchemeReference("Bearer"),
+                     []
+                   }
+                });
+#endif
             }
         );
+
 
         services.AddHttpContextAccessor();
 
@@ -202,6 +227,18 @@ public static class BotSharpOpenApiExtensions
         {
             await hook.OAuthCompleted(context);
         }
+    }
+
+    public static IServiceCollection AddCrontabServices(this IServiceCollection services)
+    {
+        services.AddScoped<ICrontabHook, IdleConversationCleanupCrontabHook>();
+        services.AddScoped<ICrontabSource, IdleConversationCleanupRuleTrigger>();
+        services.AddScoped<IRuleTrigger, IdleConversationCleanupRuleTrigger>();
+
+        services.AddScoped<ICrontabHook, ConversationLogCleanupCrontabHook>();
+        services.AddScoped<ICrontabSource, ConversationLogCleanupRuleTrigger>();
+        services.AddScoped<IRuleTrigger, ConversationLogCleanupRuleTrigger>();
+        return services;
     }
 
     /// <summary>

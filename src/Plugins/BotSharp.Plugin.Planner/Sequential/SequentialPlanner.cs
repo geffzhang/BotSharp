@@ -14,6 +14,9 @@
   limitations under the License.
 ******************************************************************************/
 
+using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Settings;
+
 namespace BotSharp.Plugin.Planner.Sequential;
 
 /// <summary>
@@ -121,13 +124,13 @@ public class SequentialPlanner : ITaskPlanner
         return true;
     }
 
-    public async Task<bool> AgentExecuting(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
+    public Task<bool> AgentExecuting(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
     {
         // Set user content as Planner's question
         message.FunctionName = inst.Function;
         message.FunctionArgs = inst.Arguments == null ? "{}" : JsonSerializer.Serialize(inst.Arguments);
 
-        return true;
+        return Task.FromResult(true);
     }
 
     public async Task<bool> AgentExecuted(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
@@ -136,12 +139,12 @@ public class SequentialPlanner : ITaskPlanner
 
         if (message.StopCompletion)
         {
-            context.Empty(reason: $"Agent queue is cleared by {nameof(SequentialPlanner)}");
+            await context.Empty(reason: $"Agent queue is cleared by {nameof(SequentialPlanner)}");
             return false;
         }
 
         // Handover to Router;
-        context.Pop();
+        await context.Pop();
 
         var routing = _services.GetRequiredService<IRoutingService>();
         routing.Context.ResetRecursiveCounter();
@@ -166,12 +169,13 @@ public class SequentialPlanner : ITaskPlanner
         var inst = new DecomposedStep();
 
         var llmProviderService = _services.GetRequiredService<ILlmProviderService>();
-        var model = llmProviderService.GetProviderModel("openai", "gpt-4o");
+        var settingService = _services.GetRequiredService<ISettingService>();
+        var model = llmProviderService.GetProviderModel("openai", Gpt4xModelConstants.GPT_4o);
 
         // chat completion
         var completion = CompletionProvider.GetChatCompletion(_services,
             provider: "openai",
-            model: model.Name);
+            model: model?.Name);
 
         int retryCount = 0;
         while (retryCount < 2)

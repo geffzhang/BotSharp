@@ -1,0 +1,376 @@
+using BotSharp.Abstraction.Templating;
+using Microsoft.Extensions.Logging;
+using Python.Runtime;
+using System.Diagnostics;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+
+namespace BotSharp.Plugin.PythonInterpreter.Services;
+
+public class PyCodeInterpreter : ICodeProcessor
+{
+    private readonly IServiceProvider _services;
+    private readonly ILogger<PyCodeInterpreter> _logger;
+    private readonly CodingSettings _settings;
+    private static readonly SemaphoreSlim _semLock = new(initialCount: 1, maxCount: 1);
+
+    public PyCodeInterpreter(
+        IServiceProvider services,
+        ILogger<PyCodeInterpreter> logger,
+        CodingSettings settings)
+    {
+        _services = services;
+        _logger = logger;
+        _settings = settings;
+    }
+
+    public string Provider => BuiltInCodeProcessor.PyInterpreter;
+
+    public CodeInterpretResponse Run(string codeScript, CodeInterpretOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        if (options?.UseLock == true)
+        {
+            return InnerRunWithLock(codeScript, options, cancellationToken);
+        }
+
+        return InnerRunCode(codeScript, options, cancellationToken);
+    }
+
+    public async Task<CodeGenerationResult> GenerateCodeScriptAsync(string text, CodeGenerationOptions? options = null)
+    {
+        Agent? agent = null;
+
+        var agentId = options?.AgentId ?? BuiltInAgentId.AIProgrammer;
+        var templateName = options?.TemplateName ?? "rule-trigger-code-generate_instruction";
+
+        if (!string.IsNullOrEmpty(agentId))
+        {
+            var agentService = _services.GetRequiredService<IAgentService>();
+            agent = await agentService.GetAgent(agentId);
+        }
+
+        var template = agent?.Templates?.FirstOrDefault(x => x.Name.IsEqualTo(templateName));
+        var llmConfig = agent?.LlmConfig;
+        if (template?.LlmConfig?.IsValid == true)
+        {
+            llmConfig = new AgentLlmConfig(template.LlmConfig);
+        }
+
+        if (llmConfig == null)
+        {
+            var (provider, model) = GetLlmProviderModel();
+            llmConfig = new AgentLlmConfig
+            {
+                Provider = provider,
+                Model = model
+            };
+        }
+
+        var instruction = template?.Content ?? agent?.Instruction;
+        if (string.IsNullOrWhiteSpace(instruction))
+        {
+            return new CodeGenerationResult
+            {
+                Success = false
+            };
+        }
+
+        var renderData = CollectRenderData(options?.Data);
+        var render = _services.GetRequiredService<ITemplateRender>();
+        var rendered = render.Render(instruction, renderData);
+        var innerAgent = new Agent
+        {
+            Id = agent!.Id,
+            Name = agent!.Name,
+            Instruction = rendered,
+            LlmConfig = llmConfig,
+            TemplateDict = renderData
+        };
+
+        text = text.IfNullOrEmptyAs("Please follow the instruction to generate code script.")!;
+        var completion = CompletionProvider.GetChatCompletion(_services, provider: innerAgent.LlmConfig.Provider, model: innerAgent.LlmConfig.Model);
+        var response = await completion.GetChatCompletions(innerAgent, new List<RoleDialogModel>
+        {
+            new RoleDialogModel(AgentRole.User, text)
+            {
+                CurrentAgentId = innerAgent.Id
+            }
+        });
+
+        return new CodeGenerationResult
+        {
+            Success = true,
+            Content = response.Content,
+            Language = options?.ProgrammingLanguage ?? "python"
+        };
+    }
+
+
+    #region Private methods
+    private CodeInterpretResponse InnerRunWithLock(string codeScript, CodeInterpretOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var lockAcquired = false;
+
+        try
+        {
+            _semLock.Wait(cancellationToken);
+            lockAcquired = true;
+            return InnerRunCode(codeScript, options, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Error in {nameof(InnerRunWithLock)} in {Provider}");
+            return new() { ErrorMsg = ex.Message };
+        }
+        finally
+        {
+            if (lockAcquired)
+            {
+                _semLock.Release();
+            }
+        }
+    }
+
+    private CodeInterpretResponse InnerRunCode(string codeScript, CodeInterpretOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var response = new CodeInterpretResponse();
+        var scriptName = options?.ScriptName ?? codeScript.SubstringMax(30);
+
+        try
+        {
+            _logger.LogWarning($"Begin running python code script in {Provider}: {scriptName}");
+
+            if (options?.UseProcess == true)
+            {
+                response = CoreRunProcess(codeScript, options, cancellationToken).ConfigureAwait(false).GetAwaiter().GetResult();
+            }
+            else
+            {
+                response = CoreRunScript(codeScript, options, cancellationToken);
+            }
+
+            _logger.LogWarning($"End running python code script in {Provider}: {scriptName}");
+
+            return response;
+        }
+        catch (OperationCanceledException oce)
+        {
+            _logger.LogError(oce, $"Operation cancelled in {nameof(InnerRunCode)} in {Provider}.");
+            response.ErrorMsg = oce.Message;
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Error when executing code script ({scriptName}) in {nameof(InnerRunCode)} in {Provider}.");
+            response.ErrorMsg = ex.Message;
+            return response;
+        }
+    }
+
+    private CodeInterpretResponse CoreRunScript(string codeScript, CodeInterpretOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var execTask = Task.Factory.StartNew(() =>
+        {
+            Thread.Sleep(100);
+
+            _logger.LogWarning($"Before acquiring Py.GIL (Python engine initialized: {PythonEngine.IsInitialized}). Thread {Thread.CurrentThread.ManagedThreadId}.");
+
+            var gil = Py.GIL();
+
+            _logger.LogWarning($"After acquiring Py.GIL ({gil != null}). Thread {Thread.CurrentThread.ManagedThreadId}.");
+
+            // Import necessary Python modules
+            dynamic sys = Py.Import("sys");
+            dynamic io = Py.Import("io");
+
+            try
+            {
+                // Redirect standard output/error to capture it
+                dynamic outIO = io.StringIO();
+                dynamic errIO = io.StringIO();
+                sys.stdout = outIO;
+                sys.stderr = errIO;
+
+                // Set global items
+                using var globals = new PyDict();
+                if (codeScript.Contains("__main__") == true)
+                {
+                    globals.SetItem("__name__", new PyString("__main__"));
+                }
+
+                // Set arguments
+                var list = new PyList();
+                if (options?.Arguments?.Any() == true)
+                {
+                    list.Append(new PyString(options?.ScriptName ?? $"{Guid.NewGuid()}.py"));
+
+                    foreach (var arg in options!.Arguments)
+                    {
+                        if (!string.IsNullOrWhiteSpace(arg.Key) && !string.IsNullOrWhiteSpace(arg.Value))
+                        {
+                            list.Append(new PyString($"--{arg.Key}"));
+                            list.Append(new PyString($"{arg.Value}"));
+                        }
+                    }
+                }
+                sys.argv = list;
+
+                _logger.LogWarning($"Code script {options?.ScriptName} arguments: {string.Join("\r\n", options?.Arguments?.Select(x => x.ToString()) ?? [])}. Thread: {Thread.CurrentThread.ManagedThreadId}.");
+
+                _logger.LogWarning($"Before executing code script {options?.ScriptName}. Thread: {Thread.CurrentThread.ManagedThreadId}.");
+
+                // Execute Python script
+                PythonEngine.Exec(codeScript, globals);
+
+                _logger.LogWarning($"After executing code script {options?.ScriptName}. Thread: {Thread.CurrentThread.ManagedThreadId}.");
+
+                // Get result
+                var stdout = outIO.getvalue()?.ToString() as string;
+                var stderr = errIO.getvalue()?.ToString() as string;
+
+                return new CodeInterpretResponse
+                {
+                    Result = stdout?.TrimEnd('\r', '\n') ?? string.Empty,
+                    Success = true
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error in {nameof(CoreRunScript)} in {Provider}.");
+                return new() { ErrorMsg = ex.Message };
+            }
+            finally
+            {
+                // Restore the original stdout/stderr/argv
+                sys.stdout = sys.__stdout__;
+                sys.stderr = sys.__stderr__;
+                sys.argv = new PyList();
+
+                _logger.LogWarning($"Before disposing Py.GIL ({gil != null}). Thread {Thread.CurrentThread.ManagedThreadId}.");
+                gil?.Dispose();
+                _logger.LogWarning($"After disposing Py.GIL. Thread {Thread.CurrentThread.ManagedThreadId}.");
+            }
+        }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        return execTask.WaitAsync(cancellationToken).ConfigureAwait(false).GetAwaiter().GetResult();
+    }
+
+
+    private async Task<CodeInterpretResponse> CoreRunProcess(string codeScript, CodeInterpretOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "python",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        // Add raw code script
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(codeScript);
+
+        // Add arguments (safe—no shared state)
+        if (options?.Arguments?.Any() == true)
+        {
+            foreach (var arg in options.Arguments!)
+            {
+                if (!string.IsNullOrWhiteSpace(arg.Key) && !string.IsNullOrWhiteSpace(arg.Value))
+                {
+                    psi.ArgumentList.Add($"--{arg.Key}");
+                    psi.ArgumentList.Add($"{arg.Value}");
+                }
+            }
+        }
+
+        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        if (!proc.Start())
+        {
+            throw new InvalidOperationException($"Failed to start Python process in {Provider}.");
+        }
+
+        try
+        {
+            using var reg = cancellationToken.Register(() =>
+            {
+                try
+                {
+                    if (!proc.HasExited)
+                    {
+                        proc.Kill(entireProcessTree: true);
+                    }
+                }
+                catch { }
+            });
+
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = proc.StandardError.ReadToEndAsync(cancellationToken);
+
+            await Task.WhenAll([proc.WaitForExitAsync(cancellationToken), stdoutTask, stderrTask]);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return new CodeInterpretResponse
+            {
+                Success = proc.ExitCode == 0,
+                Result = stdoutTask.Result?.TrimEnd('\r', '\n') ?? string.Empty,
+                ErrorMsg = stderrTask.Result
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Error in {nameof(CoreRunProcess)} in {Provider}.");
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit();
+                }
+            }
+            catch { }
+        }
+    }
+
+    private Dictionary<string, object> CollectRenderData(Dictionary<string, object>? data = null)
+    {
+        var renderData = new Dictionary<string, object>(data ?? []);
+
+        var stateService = _services.GetRequiredService<IConversationStateService>();
+        var states = stateService.GetStates();
+        foreach (var state in states)
+        {
+            renderData[state.Key] = state.Value;
+        }
+
+        return renderData;
+    }
+
+    private (string, string) GetLlmProviderModel()
+    {
+        var provider = _settings.CodeGeneration?.Provider;
+        var model = _settings.CodeGeneration?.Model;
+
+        if (!string.IsNullOrEmpty(provider) && !string.IsNullOrEmpty(model))
+        {
+            return (provider, model);
+        }
+
+        provider = "openai";
+        model = "gpt-5-mini";
+
+        return (provider, model);
+    }
+    #endregion
+}

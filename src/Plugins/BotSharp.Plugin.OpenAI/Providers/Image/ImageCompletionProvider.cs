@@ -105,10 +105,10 @@ public partial class ImageCompletionProvider : IImageCompletion
         switch (value)
         {
             case "low":
-                retQuality = GeneratedImageQuality.Low;
+                retQuality = GeneratedImageQuality.LowQuality;
                 break;
             case "medium":
-                retQuality = GeneratedImageQuality.Medium;
+                retQuality = GeneratedImageQuality.MediumQuality;
                 break;
             case "high":
                 retQuality = GeneratedImageQuality.High;
@@ -163,12 +163,30 @@ public partial class ImageCompletionProvider : IImageCompletion
         return retFormat;
     }
 
-    private int GetImageCount(string count)
+    private GeneratedImageBackground GetImageBackground(string? background)
     {
-        if (!int.TryParse(count, out var retCount))
+        var value = !string.IsNullOrEmpty(background) ? background : "auto";
+
+        GeneratedImageBackground retBackground;
+        switch (value)
         {
-            return DEFAULT_IMAGE_COUNT;
+            case "transparent":
+                retBackground = GeneratedImageBackground.Transparent;
+                break;
+            case "opaque":
+                retBackground = GeneratedImageBackground.Opaque;
+                break;
+            default:
+                retBackground = GeneratedImageBackground.Auto;
+                break;
         }
+
+        return retBackground;
+    }
+
+    private int GetImageCount(int? count)
+    {
+        var retCount = count ?? DEFAULT_IMAGE_COUNT;
 
         if (retCount <= 0)
         {
@@ -181,14 +199,24 @@ public partial class ImageCompletionProvider : IImageCompletion
         return retCount;
     }
 
-    private string? VerifyImageParameter(string? curVal, string? defaultVal, IEnumerable<string>? options = null)
+    private float GetImageGenerationUnitCost(IEnumerable<LlmImageCost>? costs, string? quality, string? size)
     {
-        if (options.IsNullOrEmpty())
+        var unitCost = 0f;
+        if (costs.IsNullOrEmpty())
         {
-            return curVal.IfNullOrEmptyAs(defaultVal);
+            return unitCost;
         }
 
-        return options.Contains(curVal) ? curVal : defaultVal;
+        if (string.IsNullOrEmpty(quality) || string.IsNullOrEmpty(size))
+        {
+            return unitCost;
+        }
+
+        var found = costs!.FirstOrDefault(x => x.Attributes != null
+                        && x.Attributes.GetValueOrDefault("Quality", string.Empty).IsEqualTo(quality)
+                        && x.Attributes.GetValueOrDefault("Size", string.Empty).IsEqualTo(size));
+        unitCost = found?.Cost ?? unitCost;
+        return unitCost;
     }
     #endregion
 }

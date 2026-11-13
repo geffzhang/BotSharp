@@ -15,6 +15,8 @@ public class TextEmbeddingProvider : ITextEmbedding
     public virtual string Provider => "openai";
     public string Model => _model;
 
+    private string? _apiKey;
+
     public TextEmbeddingProvider(
         OpenAiSettings settings,
         ILogger<TextEmbeddingProvider> logger,
@@ -25,9 +27,12 @@ public class TextEmbeddingProvider : ITextEmbedding
         _services = services;
     }
 
-    public async Task<float[]> GetVectorAsync(string text)
+    [SharpCache(60)]
+    public async Task<float[]> GetVectorAsync(string text, int? dimension = null)
     {
-        var client = ProviderHelper.GetClient(Provider, _model, _services);
+        if (dimension.HasValue) SetDimension(dimension.Value);
+
+        var client = ProviderHelper.GetClient(Provider, _model, apiKey: _apiKey, _services);
         var embeddingClient = client.GetEmbeddingClient(_model);
         var options = PrepareOptions();
         var response = await embeddingClient.GenerateEmbeddingAsync(text, options);
@@ -35,9 +40,11 @@ public class TextEmbeddingProvider : ITextEmbedding
         return value.ToFloats().ToArray();
     }
 
-    public async Task<List<float[]>> GetVectorsAsync(List<string> texts)
+    public async Task<List<float[]>> GetVectorsAsync(List<string> texts, int? dimension = null)
     {
-        var client = ProviderHelper.GetClient(Provider, _model, _services);
+        if (dimension.HasValue) SetDimension(dimension.Value);
+
+        var client = ProviderHelper.GetClient(Provider, _model, apiKey: _apiKey, _services);
         var embeddingClient = client.GetEmbeddingClient(_model);
         var options = PrepareOptions();
         var response = await embeddingClient.GenerateEmbeddingsAsync(texts, options);
@@ -48,6 +55,11 @@ public class TextEmbeddingProvider : ITextEmbedding
     public void SetModelName(string model)
     {
         _model = model;
+    }
+
+    public void SetApiKey(string apiKey)
+    {
+        _apiKey = apiKey;
     }
 
     public void SetDimension(int dimension)

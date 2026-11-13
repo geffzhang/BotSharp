@@ -39,13 +39,17 @@ public class TwilioTranscribeController : TwilioController
                 {
                     CurrentAgentId = request.AgentId
                 };
-                storage.Append(request.ConversationId, message);
+                await storage.Append(request.ConversationId, message);
 
                 var routing = _services.GetRequiredService<IRoutingService>();
                 routing.Context.SetMessageId(request.ConversationId, message.MessageId);
 
+                // Authenticate synchronously and before loading states: this is the fallback identity,
+                // which OnStateLoaded may override with the caller's own.
+                HookEmitter.Emit<ITwilioSessionHook>(_services, hook => hook.OnAuthenticate(request), request.AgentId);
+
                 var convService = _services.GetRequiredService<IConversationService>();
-                convService.SetConversationId(request.ConversationId, []);
+                await convService.SetConversationId(request.ConversationId, []);
 
                 // transcription completed
                 transcript.Language = request.LanguageCode;

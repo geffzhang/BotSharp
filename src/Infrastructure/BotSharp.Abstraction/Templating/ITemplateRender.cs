@@ -2,6 +2,5 @@ namespace BotSharp.Abstraction.Templating;
 
 public interface ITemplateRender
 {
-    string Render(string template, Dictionary<string, object> dict);
-    void RegisterType(Type type);
+    string Render(string template, IDictionary<string, object> dict);
 }

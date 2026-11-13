@@ -1,4 +1,5 @@
 using BotSharp.Abstraction.Realtime.Models;
+using BotSharp.Abstraction.Realtime.Options;
 
 namespace BotSharp.Abstraction.MLTasks;
 
@@ -7,6 +8,7 @@ public interface IRealTimeCompletion
     string Provider { get; }
     string Model { get; }
     void SetModelName(string model);
+    void SetOptions(RealtimeOptions? options);
 
     Task Connect(
         RealtimeHubConnection conn,

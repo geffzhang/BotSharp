@@ -1,4 +1,6 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using OpenAI.Audio;
+using System.Drawing;
 
 namespace BotSharp.Plugin.OpenAI.Providers.Audio;
 
@@ -23,40 +25,64 @@ public class AudioTranscriptionProvider : IAudioTranscription
 
     public async Task<string> TranscriptTextAsync(Stream audio, string audioFileName, string? text = null)
     {
-        var audioClient = ProviderHelper.GetClient(Provider, _model, _services)
+        var settingsService = _services.GetRequiredService<ILlmProviderService>();
+        var settings = settingsService.GetSetting(Provider, _model);
+
+        var audioClient = ProviderHelper.GetClient(Provider, _model, apiKey: null, _services)
                                         .GetAudioClient(_model);
 
-        var options = PrepareTranscriptionOptions(text);
+        var options = PrepareTranscriptionOptions(text, settings?.Audio?.Transcription);
         var result = await audioClient.TranscribeAudioAsync(audio, audioFileName, options);
         return result.Value.Text;
     }
 
-    private AudioTranscriptionOptions PrepareTranscriptionOptions(string? text)
+    private AudioTranscriptionOptions PrepareTranscriptionOptions(string? text, AudioTranscriptionSetting? settings)
     {
         var state = _services.GetRequiredService<IConversationStateService>();
-        var format = GetTranscriptionResponseFormat(state.GetState("audio_response_format"));
-        var granularity = GetGranularity(state.GetState("audio_granularity"));
-        var temperature = GetTemperature(state.GetState("audio_temperature"));
+        var temperature = state.GetState<float?>(AudioStateConst.AUDIO_TEMPERATURE);
+        var responseFormat = state.GetState(AudioStateConst.AUDIO_RESPONSE_FORMAT);
+        var granularity = state.GetState(AudioStateConst.AUDIO_GRANULARITY);
+
+        temperature ??= settings?.Temperature;
+
+        responseFormat = LlmUtility.GetModelParameter(settings?.Parameters, "ResponseFormat", responseFormat);
+        granularity = LlmUtility.GetModelParameter(settings?.Parameters, "Granularity", granularity);
 
         var options = new AudioTranscriptionOptions
         {
-            ResponseFormat = format,
-            TimestampGranularities = granularity,
-            Temperature = temperature,
             Prompt = text
         };
+
+        if (temperature.HasValue)
+        {
+            options.Temperature = temperature;
+        }
+        if (!string.IsNullOrEmpty(responseFormat))
+        {
+            options.ResponseFormat = GetTranscriptionResponseFormat(responseFormat);
+        }
+        if (!string.IsNullOrEmpty(granularity))
+        {
+            options.TimestampGranularities = GetGranularity(granularity);
+        }
 
         return options;
     }
 
     private AudioTranscriptionFormat GetTranscriptionResponseFormat(string input)
     {
-        var value = !string.IsNullOrEmpty(input) ? input : "verbose";
+        var value = !string.IsNullOrEmpty(input) ? input : "json";
 
         AudioTranscriptionFormat format;
         switch (value)
         {
             case "json":
+                format = new AudioTranscriptionFormat("json");
+                break;
+            case "text":
+                format = new AudioTranscriptionFormat("text");
+                break;
+            case "simple":
                 format = AudioTranscriptionFormat.Simple;
                 break;
             case "srt":
@@ -92,15 +118,5 @@ public class AudioTranscriptionProvider : IAudioTranscription
         }
 
         return granularity;
-    }
-
-    private float? GetTemperature(string input)
-    {
-        if (!float.TryParse(input, out var temperature))
-        {
-            return null;
-        }
-
-        return temperature;
     }
 }

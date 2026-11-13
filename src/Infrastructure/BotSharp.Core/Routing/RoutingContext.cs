@@ -11,6 +11,7 @@ public class RoutingContext : IRoutingContext
     private string[] _routerAgentIds;
     private string _conversationId;
     private string _messageId;
+    private string _messageAgentId;
     private int _currentRecursionDepth = 0;
     private List<RoleDialogModel> _dialogs = [];
 
@@ -46,7 +47,7 @@ public class RoutingContext : IRoutingContext
                 {
                     Types = [AgentType.Routing],
                     Pager = new Pagination { Size = 100 }
-                }).Result.Items.Select(x => x.Id).ToArray();
+                }).ConfigureAwait(false).GetAwaiter().GetResult().Items.Select(x => x.Id).ToArray();
             }
 
             return _stack.Where(x => !_routerAgentIds.Contains(x)).LastOrDefault() ?? string.Empty;
@@ -60,7 +61,7 @@ public class RoutingContext : IRoutingContext
     {
         get
         {
-            return _stack.LastOrDefault() ?? string.Empty;
+            return _stack.LastOrDefault() ?? _messageAgentId;
         }
     }
 
@@ -70,7 +71,7 @@ public class RoutingContext : IRoutingContext
     {
         if (_stack.Count == 0)
         {
-            return string.Empty;
+            return _messageAgentId;
         }
 
         return _stack.Peek();
@@ -81,13 +82,13 @@ public class RoutingContext : IRoutingContext
     /// </summary>
     /// <param name="agentId">Id or Name</param>
     /// <param name="reason"></param>
-    public void Push(string agentId, string? reason = null, bool updateLazyRouting = true)
+    public async Task Push(string agentId, string? reason = null, bool updateLazyRouting = true)
     {
         // Convert id to name
         if (!Guid.TryParse(agentId, out _))
         {
             var agentService = _services.GetRequiredService<IAgentService>();
-            var agents = agentService.GetAgentOptions([agentId], byName: true).Result;
+            var agents = await agentService.GetAgentOptions([agentId], byName: true);
 
             if (agents.Count > 0)
             {
@@ -100,8 +101,8 @@ public class RoutingContext : IRoutingContext
             var preAgentId = _stack.Count == 0 ? agentId : _stack.Peek();
             _stack.Push(agentId);
 
-            HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentEnqueued(agentId, preAgentId, reason: reason),
-                agentId).Wait();
+            await HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentEnqueued(agentId, preAgentId, reason: reason),
+                agentId);
 
             UpdateLazyRoutingAgent(updateLazyRouting);
         }
@@ -110,7 +111,7 @@ public class RoutingContext : IRoutingContext
     /// <summary>
     /// Pop current agent
     /// </summary>
-    public void Pop(string? reason = null, bool updateLazyRouting = true)
+    public async Task Pop(string? reason = null, bool updateLazyRouting = true)
     {
         if (_stack.Count == 0)
         {
@@ -120,8 +121,8 @@ public class RoutingContext : IRoutingContext
         var agentId = _stack.Pop();
         var currentAgentId = GetCurrentAgentId();
 
-        HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentDequeued(agentId, currentAgentId, reason: reason),
-            agentId).Wait();
+        await HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentDequeued(agentId, currentAgentId, reason: reason),
+            agentId);
 
         if (string.IsNullOrEmpty(currentAgentId))
         {
@@ -129,8 +130,8 @@ public class RoutingContext : IRoutingContext
         }
 
         // Run the routing rule
-        var agency = _services.GetRequiredService<IAgentService>();
-        var agent = agency.GetAgent(currentAgentId).Result;
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var agent = await agentService.GetAgent(currentAgentId);
 
         var message = new RoleDialogModel(AgentRole.User, $"Try to route to agent {agent.Name}")
         {
@@ -145,25 +146,25 @@ public class RoutingContext : IRoutingContext
         };
 
         var routing = _services.GetRequiredService<IRoutingService>();
-        var (missingfield, _) = routing.HasMissingRequiredField(message, out agentId);
+        var (missingfield, _, redirectedAgentId) = await routing.HasMissingRequiredField(message);
         if (missingfield)
         {
-            if (currentAgentId != agentId)
+            if (currentAgentId != redirectedAgentId)
             {
-                _stack.Push(agentId);
+                _stack.Push(redirectedAgentId);
             }
         }
 
         UpdateLazyRoutingAgent(updateLazyRouting);
     }
 
-    public void PopTo(string agentId, string reason, bool updateLazyRouting = true)
+    public async Task PopTo(string agentId, string reason, bool updateLazyRouting = true)
     {
         var currentAgentId = GetCurrentAgentId();
         while (!string.IsNullOrEmpty(currentAgentId) && 
             currentAgentId != agentId)
         {
-            Pop(reason, updateLazyRouting: updateLazyRouting);
+            await Pop(reason, updateLazyRouting: updateLazyRouting);
             currentAgentId = GetCurrentAgentId();
         }
     }
@@ -187,7 +188,7 @@ public class RoutingContext : IRoutingContext
         return _stack.ToArray().Contains(agentId);
     }
 
-    public void Replace(string agentId, string? reason = null, bool updateLazyRouting = true)
+    public async Task Replace(string agentId, string? reason = null, bool updateLazyRouting = true)
     {
         var fromAgent = agentId;
         var toAgent = agentId;
@@ -202,14 +203,14 @@ public class RoutingContext : IRoutingContext
             _stack.Pop();
             _stack.Push(agentId);
 
-            HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentReplaced(fromAgent, toAgent, reason: reason),
-                agentId).Wait();
+            await HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentReplaced(fromAgent, toAgent, reason: reason),
+                agentId);
         }
 
         UpdateLazyRoutingAgent(updateLazyRouting);
     }
 
-    public void Empty(string? reason = null)
+    public async Task Empty(string? reason = null)
     {
         if (_stack.Count == 0)
         {
@@ -218,14 +219,19 @@ public class RoutingContext : IRoutingContext
 
         var agentId = GetCurrentAgentId();
         _stack.Clear();
-        HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentQueueEmptied(agentId, reason: reason),
-            agentId).Wait();
+        await HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnAgentQueueEmptied(agentId, reason: reason),
+            agentId);
     }
 
     public void SetMessageId(string conversationId, string messageId)
     {
         _conversationId = conversationId;
         _messageId = messageId;
+    }
+
+    public void SetMessageAgentId(string agentId)
+    {
+        _messageAgentId = agentId;
     }
 
     public int GetRecursiveCounter()
@@ -269,12 +275,20 @@ public class RoutingContext : IRoutingContext
 
     public void SetDialogs(List<RoleDialogModel> dialogs)
     {
-        _dialogs = dialogs ?? [];
+        _dialogs = new List<RoleDialogModel>(dialogs ?? []);
+    }
+
+    public void AddDialogs(List<RoleDialogModel> dialogs)
+    {
+        var items = new List<RoleDialogModel>(dialogs ?? []);
+        _dialogs ??= [];
+        _dialogs.AddRange(items);
     }
 
     public List<RoleDialogModel> GetDialogs()
     {
-        return _dialogs ?? [];
+        _dialogs ??= [];
+        return new List<RoleDialogModel>(_dialogs);
     }
 
     public void ResetDialogs()
@@ -291,14 +305,10 @@ public class RoutingContext : IRoutingContext
 
         // Set next handling agent for lazy routing mode
         var states = _services.GetRequiredService<IConversationStateService>();
-        var routingMode = states.GetState(StateConst.ROUTING_MODE, RoutingMode.Eager);
-        if (routingMode == RoutingMode.Lazy)
+        var agentId = GetCurrentAgentId();
+        if (agentId != BuiltInAgentId.Fallback)
         {
-            var agentId = GetCurrentAgentId();
-            if (agentId != BuiltInAgentId.Fallback)
-            {
-                states.SetState(StateConst.LAZY_ROUTING_AGENT_ID, agentId);
-            }
+            states.SetState(StateConst.LAZY_ROUTING_AGENT_ID, agentId);
         }
     }
 }

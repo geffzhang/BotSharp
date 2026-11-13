@@ -4,13 +4,19 @@ namespace BotSharp.Core.Repository;
 
 public partial class FileRepository
 {
-    public bool RefreshRoles(IEnumerable<Role> roles)
+    public async Task<bool> RefreshRoles(IEnumerable<Role> roles)
     {
-        if (roles.IsNullOrEmpty()) return false;
+        if (roles.IsNullOrEmpty())
+        {
+            return false;
+        }
 
         var validRoles = roles.Where(x => !string.IsNullOrWhiteSpace(x.Id)
                                        && !string.IsNullOrWhiteSpace(x.Name)).ToList();
-        if (validRoles.IsNullOrEmpty()) return false;
+        if (validRoles.IsNullOrEmpty())
+        {
+            return false;
+        }
 
         var baseDir = Path.Combine(_dbSettings.FileRepository, ROLES_FOLDER);
         if (Directory.Exists(baseDir))
@@ -24,17 +30,17 @@ public partial class FileRepository
         {
             var dir = Path.Combine(baseDir, role.Id);
             Directory.CreateDirectory(dir);
-            Thread.Sleep(50);
+            await Task.Delay(50);
             var roleFile = Path.Combine(dir, ROLE_FILE);
             role.CreatedTime = DateTime.UtcNow;
             role.UpdatedTime = DateTime.UtcNow;
-            File.WriteAllText(roleFile, JsonSerializer.Serialize(role, _options));
+            await File.WriteAllTextAsync(roleFile, JsonSerializer.Serialize(role, _options));
         }
 
         return true;
     }
 
-    public IEnumerable<Role> GetRoles(RoleFilter filter)
+    public async Task<IEnumerable<Role>> GetRoles(RoleFilter filter)
     {
         var roles = Roles;
         if (filter == null)
@@ -53,15 +59,21 @@ public partial class FileRepository
             roles = roles.Where(x => !filter.ExcludeRoles.Contains(x.Name));
         }
 
-        return roles.ToList();
+        return await Task.FromResult(roles.ToList());
     }
 
-    public Role? GetRoleDetails(string roleId, bool includeAgent = false)
+    public async Task<Role?> GetRoleDetails(string roleId, bool includeAgent = false)
     {
-        if (string.IsNullOrWhiteSpace(roleId)) return null;
+        if (string.IsNullOrWhiteSpace(roleId))
+        {
+            return null;
+        }
 
         var role = Roles.FirstOrDefault(x => x.Id == roleId);
-        if (role == null) return null;
+        if (role == null)
+        {
+            return null;
+        }
 
         var agentActions = new List<RoleAgentAction>();
         var roleAgents = RoleAgents?.Where(x => x.RoleId == roleId)?.ToList() ?? [];
@@ -81,7 +93,7 @@ public partial class FileRepository
         var agentIds = roleAgents.Select(x => x.AgentId).Distinct().ToList();
         if (!agentIds.IsNullOrEmpty())
         { 
-            var agents = GetAgents(new AgentFilter { AgentIds = agentIds });
+            var agents = await GetAgents(new AgentFilter { AgentIds = agentIds });
 
             foreach (var item in roleAgents)
             {
@@ -102,7 +114,7 @@ public partial class FileRepository
         return role;
     }
 
-    public bool UpdateRole(Role role, bool updateRoleAgents = false)
+    public async Task<bool> UpdateRole(Role role, bool updateRoleAgents = false)
     {
         if (string.IsNullOrEmpty(role?.Id) || string.IsNullOrEmpty(role?.Name))
         {
@@ -118,7 +130,7 @@ public partial class FileRepository
         var roleFile = Path.Combine(dir, ROLE_FILE);
         role.CreatedTime = DateTime.UtcNow;
         role.UpdatedTime = DateTime.UtcNow;
-        File.WriteAllText(roleFile, JsonSerializer.Serialize(role, _options));
+        await File.WriteAllTextAsync(roleFile, JsonSerializer.Serialize(role, _options));
 
         if (updateRoleAgents)
         {
@@ -133,7 +145,7 @@ public partial class FileRepository
             })?.ToList() ?? [];
 
             var roleAgentFile = Path.Combine(dir, ROLE_AGENT_FILE);
-            File.WriteAllText(roleAgentFile, JsonSerializer.Serialize(roleAgents, _options));
+            await File.WriteAllTextAsync(roleAgentFile, JsonSerializer.Serialize(roleAgents, _options));
             _roleAgents = [];
         }
 

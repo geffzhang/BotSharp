@@ -1,5 +1,3 @@
-using LLMSharp.Google.Palm;
-
 namespace BotSharp.Plugin.GoogleAi.Providers;
 
 public static class ProviderHelper
@@ -20,11 +18,12 @@ public static class ProviderHelper
         }
     }
 
-    public static GooglePalmClient GetPalmClient(string provider, string model, IServiceProvider services)
+    /// <summary>
+    /// Gemini bills thinking tokens as output but reports them separately from
+    /// the candidates, so both have to be counted.
+    /// </summary>
+    public static long GetOutputTokens(GenerativeAI.Types.UsageMetadata? usage)
     {
-        var settingsService = services.GetRequiredService<ILlmProviderService>();
-        var settings = settingsService.GetSetting(provider, model);
-        var client = new GooglePalmClient(settings.ApiKey);
-        return client;
+        return (usage?.CandidatesTokenCount ?? 0) + (usage?.ThoughtsTokenCount ?? 0);
     }
 }

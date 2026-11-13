@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Plugin.Planner.TwoStaging.Models;
 
 namespace BotSharp.Plugin.Planner.TwoStaging.Functions;
@@ -23,7 +24,7 @@ public class PrimaryStagePlanFn : IFunctionCallback
         var agentService = _services.GetRequiredService<IAgentService>();
         var state = _services.GetRequiredService<IConversationStateService>();
 
-        state.SetState("max_tokens", "4096");
+        state.SetState(LlmStateConst.MAX_TOKENS, "4096");
         var task = JsonSerializer.Deserialize<PrimaryRequirementRequest>(message.FunctionArgs);
         var searchQuestions = new List<string>(task.Questions);
         searchQuestions.AddRange(task.NormQuestions);
@@ -52,7 +53,6 @@ public class PrimaryStagePlanFn : IFunctionCallback
             Id = message.CurrentAgentId,
             Name = Name,
             Instruction = prompt,
-            TemplateDict = new Dictionary<string, object>(),
             LlmConfig = currentAgent.LlmConfig
         };
         var response = await GetAiResponse(plannerAgent);
@@ -94,7 +94,7 @@ public class PrimaryStagePlanFn : IFunctionCallback
     private async Task<RoleDialogModel> GetAiResponse(Agent plannerAgent)
     {
         var conv = _services.GetRequiredService<IConversationService>();
-        var wholeDialogs = conv.GetDialogHistory();
+        var wholeDialogs = await conv.GetDialogHistory();
 
         var completion = CompletionProvider.GetChatCompletion(_services, 
             provider: plannerAgent.LlmConfig.Provider, 

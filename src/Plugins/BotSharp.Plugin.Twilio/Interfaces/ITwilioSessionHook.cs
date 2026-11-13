@@ -8,6 +8,12 @@ namespace BotSharp.Plugin.Twilio.Interfaces;
 public interface ITwilioSessionHook : IHookBase
 {
     /// <summary>
+    /// Establishes the operator identity synchronously at the HTTP entry points only; the WebSocket and background flows manage identity separately.
+    /// </summary>
+    /// <param name="request"></param>
+    void OnAuthenticate(ConversationalVoiceRequest request);
+
+    /// <summary>
     /// Before session creating
     /// </summary>
     /// <param name="request"></param>
@@ -71,6 +77,15 @@ public interface ITwilioSessionHook : IHookBase
     /// <param name="response"></param>
     /// <returns></returns>
     Task OnAgentHangUp(ConversationalVoiceRequest request)
+        => Task.CompletedTask;
+
+    /// <summary>
+    /// The caller hung up while talking to the agent (a ConversationRelay session ended with the call completed and no
+    /// handoff from the agent)
+    /// </summary>
+    /// <param name="request"></param>
+    /// <returns></returns>
+    Task OnCallerHangUp(ConversationalVoiceRequest request)
         => Task.CompletedTask;
 
     /// <summary>

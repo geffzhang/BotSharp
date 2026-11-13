@@ -1,5 +1,6 @@
 using BotSharp.Abstraction.Files;
 using BotSharp.Abstraction.Files.Models;
+using BotSharp.Abstraction.Files.Options;
 
 namespace BotSharp.Plugin.Google.Core
 {
@@ -54,7 +55,7 @@ namespace BotSharp.Plugin.Google.Core
             return string.Join("/", segments);
         }
 
-        public Task<IEnumerable<MessageFileModel>> GetMessageFileScreenshotsAsync(string conversationId, IEnumerable<string> messageIds)
+        public Task<IEnumerable<MessageFileModel>> GetMessageFileScreenshotsAsync(string conversationId, IEnumerable<string> messageIds, MessageFileScreenshotOptions options)
         {
             return Task.FromResult<IEnumerable<MessageFileModel>>(new List<MessageFileModel>
             {
@@ -63,8 +64,7 @@ namespace BotSharp.Plugin.Google.Core
             });
         }
 
-        public IEnumerable<MessageFileModel> GetMessageFiles(string conversationId, IEnumerable<string> messageIds, string source,
-            IEnumerable<string>? contentTypes = null)
+        public IEnumerable<MessageFileModel> GetMessageFiles(string conversationId, IEnumerable<string> messageIds, MessageFileOptions? options = null)
         {
             return new List<MessageFileModel>
             {
@@ -76,15 +76,6 @@ namespace BotSharp.Plugin.Google.Core
         public string GetMessageFile(string conversationId, string messageId, string source, string index, string fileName)
         {
             return $"FakePath/{fileName}";
-        }
-
-        public IEnumerable<MessageFileModel> GetMessagesWithFile(string conversationId, IEnumerable<string> messageIds)
-        {
-            return new List<MessageFileModel>
-            {
-                new MessageFileModel { FileName = "MessageFile1.jpg" },
-                new MessageFileModel { FileName = "MessageFile2.png" }
-            };
         }
 
         public bool SaveMessageFiles(string conversationId, string messageId, string source, List<FileDataModel> files)
@@ -103,14 +94,14 @@ namespace BotSharp.Plugin.Google.Core
             return true;
         }
 
-        public string GetUserAvatar()
+        public Task<string> GetUserAvatar()
         {
-            return "FakeUserAvatar.png";
+            return Task.FromResult("FakeUserAvatar.png");
         }
 
-        public bool SaveUserAvatar(FileDataModel file)
+        public Task<bool> SaveUserAvatar(FileDataModel file)
         {
-            return true;
+            return Task.FromResult(true);
         }
 
         public bool SaveSpeechFile(string conversationId, string fileName, BinaryData data)
@@ -123,23 +114,23 @@ namespace BotSharp.Plugin.Google.Core
             return BinaryData.FromBytes(new byte[] { 0x03, 0x04, 0x05 });
         }
 
-        public bool SaveKnowledgeBaseFile(string collectionName, string vectorStoreProvider, Guid fileId, string fileName,
+        public bool SaveKnowledgeBaseFile(string collectionName, string knowledgebaseProvider, Guid fileId, string fileName,
             BinaryData fileData)
         {
             return true;
         }
 
-        public bool DeleteKnowledgeFile(string collectionName, string vectorStoreProvider, Guid? fileId = null)
+        public bool DeleteKnowledgeFile(string collectionName, string knowledgebaseProvider, Guid? fileId = null)
         {
             return true;
         }
 
-        public string GetKnowledgeBaseFileUrl(string collectionName, string vectorStoreProvider, Guid fileId, string fileName)
+        public string GetKnowledgeBaseFileUrl(string collectionName, string knowledgebaseProvider, Guid fileId, string fileName)
         {
             return $"https://fakeurl.com/{fileName}";
         }
 
-        public BinaryData GetKnowledgeBaseFileBinaryData(string collectionName, string vectorStoreProvider, Guid fileId,
+        public BinaryData GetKnowledgeBaseFileBinaryData(string collectionName, string knowledgebaseProvider, Guid fileId,
             string fileName)
         {
             return BinaryData.FromBytes(new byte[] { 0x06, 0x07, 0x08 });

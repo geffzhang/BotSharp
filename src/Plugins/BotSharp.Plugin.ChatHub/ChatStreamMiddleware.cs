@@ -1,5 +1,7 @@
-using BotSharp.Abstraction.Models;
-using BotSharp.Abstraction.Realtime.Models.Session;
+using BotSharp.Abstraction.Realtime;
+using BotSharp.Abstraction.Realtime.Options;
+using BotSharp.Abstraction.Realtime.Sessions;
+using BotSharp.Core.Infrastructures;
 using BotSharp.Core.Session;
 using Microsoft.AspNetCore.Http;
 using System.Net.WebSockets;
@@ -10,7 +12,6 @@ public class ChatStreamMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<ChatStreamMiddleware> _logger;
-    private BotSharpRealtimeSession _session;
 
     public ChatStreamMiddleware(
         RequestDelegate next,
@@ -31,16 +32,32 @@ public class ChatStreamMiddleware
                 try
                 {
                     var services = httpContext.RequestServices;
-                    var segments = request.Path.Value.Split("/");
+                    var segments = request.Path.Value!.Split("/");
                     var agentId = segments[segments.Length - 2];
                     var conversationId = segments[segments.Length - 1];
+
+                    /*
+                     * Identity, before anything else touches the connection.
+                     *
+                     * The handshake carries no Authorization header - a browser cannot set one on
+                     * a WebSocket - so the signed-in user arrives as a query parameter. It stays
+                     * a query parameter rather than a path segment because agentId and
+                     * conversationId are read from the END of the path above, so an extra segment
+                     * would silently shift both.
+                     *
+                     * Emitted through the SYNCHRONOUS Emit overload: ambient identity is
+                     * AsyncLocal-backed and a write inside an async method does not escape it, so
+                     * an awaited hook would establish nothing for the work awaited below.
+                     */
+                    var userId = httpContext.Request.Query["user-id"].FirstOrDefault();
+                    HookEmitter.Emit<IRealtimeHook>(services,
+                        hook => hook.OnAuthenticate(agentId, conversationId, userId), agentId);
 
                     using var webSocket = await httpContext.WebSockets.AcceptWebSocketAsync();
                     await HandleWebSocket(services, agentId, conversationId, webSocket);
                 }
                 catch (Exception ex)
                 {
-                    _session?.Dispose();
                     _logger.LogError(ex, $"Error when connecting Chat stream. ({ex.Message})");
                 }
                 return;
@@ -52,8 +69,7 @@ public class ChatStreamMiddleware
 
     private async Task HandleWebSocket(IServiceProvider services, string agentId, string conversationId, WebSocket webSocket)
     {
-        _session?.Dispose();
-        _session = new BotSharpRealtimeSession(services, webSocket, new ChatSessionOptions
+        using var session = new BotSharpRealtimeSession(services, webSocket, new ChatSessionOptions
         {
             Provider = "BotSharp Chat Stream",
             BufferSize = 1024 * 32,
@@ -69,10 +85,12 @@ public class ChatStreamMiddleware
         // load conversation and state
         var convService = services.GetRequiredService<IConversationService>();
         var state = services.GetRequiredService<IConversationStateService>();
-        convService.SetConversationId(conversationId, []);
+        var routing = services.GetRequiredService<IRoutingService>();
+        await convService.SetConversationId(conversationId, []);
         await convService.GetConversationRecordOrCreateNew(agentId);
+        await routing.Context.Push(agentId);
 
-        await foreach (ChatSessionUpdate update in _session.ReceiveUpdatesAsync(CancellationToken.None))
+        await foreach (ChatSessionUpdate update in session.ReceiveUpdatesAsync(CancellationToken.None))
         {
             var receivedText = update?.RawResponse;
             if (string.IsNullOrEmpty(receivedText))
@@ -83,11 +101,9 @@ public class ChatStreamMiddleware
             var (eventType, data) = MapEvents(conn, receivedText, conversationId);
             if (eventType == "start")
             {
-#if DEBUG
-                _logger.LogCritical($"Start chat stream connection for conversation ({conversationId})");
-#endif
+                _logger.LogDebug($"Start chat stream connection for conversation ({conversationId})");
                 var request = InitRequest(data, conversationId);
-                await ConnectToModel(hub, webSocket, request?.States);
+                await ConnectToModel(hub, session, request);
             }
             else if (eventType == "media")
             {
@@ -98,28 +114,43 @@ public class ChatStreamMiddleware
             }
             else if (eventType == "disconnect")
             {
-#if DEBUG
-                _logger.LogCritical($"Disconnecting chat stream connection for conversation ({conversationId})");
-#endif
-                await hub.Completer.Disconnect();
+                _logger.LogDebug($"Disconnecting chat stream connection for conversation ({conversationId})");
                 break;
             }
         }
 
-        convService.SaveStates();
-        await _session.DisconnectAsync();
-        _session.Dispose();
+        /*
+         * Runs however the loop ended, not just on an explicit disconnect. The browser sends
+         * "disconnect" and closes the socket in the same breath, so the close often wins the
+         * race; closing the tab sends nothing at all. Either way the loop simply ends, and
+         * leaving the model session undisconnected stranded the final turn in the provider's
+         * buffer with nothing left to flush it.
+         */
+        if (hub.Completer != null)
+        {
+            try
+            {
+                await hub.Completer.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error when disconnecting the model for conversation ({conversationId})");
+            }
+        }
+
+        await convService.SaveStates();
+        await session.DisconnectAsync();
     }
 
-    private async Task ConnectToModel(IRealtimeHub hub, WebSocket webSocket, List<MessageState>? states = null)
+    private async Task ConnectToModel(IRealtimeHub hub, BotSharpRealtimeSession session, ChatStreamRequest? request)
     {
         await hub.ConnectToModel(responseToUser: async data =>
         {
-            if (_session != null)
+            if (session != null)
             {
-                await _session.SendEventAsync(data);
+                await session.SendEventAsync(data);
             }
-        }, initStates: states);
+        }, initStates: request?.States, options: request?.Options);
     }
 
     private (string, string) MapEvents(RealtimeHubConnection conn, string receivedText, string conversationId)
@@ -164,6 +195,13 @@ public class ChatStreamMiddleware
             {
                 @event = "mark",
                 mark = new { name = "responsePart" }
+            });
+
+        conn.OnModelTranscriptDelta = (role, delta) =>
+            JsonSerializer.Serialize(new
+            {
+                @event = "transcript",
+                transcript = new { role, delta }
             });
 
         conn.OnModelUserInterrupted = () =>

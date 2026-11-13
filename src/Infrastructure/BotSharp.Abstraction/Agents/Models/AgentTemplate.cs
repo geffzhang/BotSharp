@@ -1,9 +1,8 @@
 namespace BotSharp.Abstraction.Agents.Models;
 
-public class AgentTemplate
+public class AgentTemplate : AgentTemplateConfig
 {
-    public string Name { get; set; }
-    public string Content { get; set; }
+    public string Content { get; set; } = string.Empty;
 
     public AgentTemplate()
     {
@@ -19,4 +18,17 @@ public class AgentTemplate
     {
         return Name;
     }
+}
+
+public class AgentTemplateConfig
+{
+    public string Name { get; set; }
+
+    [JsonPropertyName("llm_config")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentTemplateLlmConfig? LlmConfig { get; set; }
+}
+
+public class AgentTemplateLlmConfig : LlmConfigBase
+{
 }

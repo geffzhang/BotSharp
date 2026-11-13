@@ -1,6 +1,6 @@
-using BotSharp.Abstraction.Conversations.Enums;
 using BotSharp.Abstraction.MLTasks;
 using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Settings;
 using BotSharp.Abstraction.Templating;
 
 namespace BotSharp.Core.Conversations.Services;
@@ -19,11 +19,10 @@ public partial class ConversationService
         {
             if (string.IsNullOrEmpty(conversationId)) continue;
 
-            var dialogs = _storage.GetDialogs(conversationId);
+            var dialogs = await _storage.GetDialogs(conversationId);
 
             if (dialogs.IsNullOrEmpty()) continue;
 
-            dialogs = dialogs.Where(x => x.MessageType != MessageTypeName.Notification).ToList();
             var content = GetConversationContent(dialogs);
             if (string.IsNullOrWhiteSpace(content)) continue;
 
@@ -62,8 +61,10 @@ public partial class ConversationService
         string? model;
 
         var providerService = _services.GetRequiredService<ILlmProviderService>();
+        var settingService = _services.GetRequiredService<ISettingService>();
         var modelSettings = providerService.GetProviderModels(provider);
-        var modelSetting = modelSettings.FirstOrDefault(x => x.Name.IsEqualTo("gpt4-turbo") || x.Name.IsEqualTo("gpt-4o"));
+        var defaultModel = Gpt4xModelConstants.GPT_4o;
+        var modelSetting = modelSettings.FirstOrDefault(x => x.Name.IsEqualTo(defaultModel));
 
         if (modelSetting != null)
         {

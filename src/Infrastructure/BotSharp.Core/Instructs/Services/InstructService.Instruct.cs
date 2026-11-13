@@ -1,5 +1,7 @@
-using BotSharp.Abstraction.Instructs.Models;
+using BotSharp.Abstraction.Instructs.Options;
+using BotSharp.Abstraction.Models;
 using BotSharp.Abstraction.Options;
+using BotSharp.Abstraction.Settings;
 using BotSharp.Abstraction.Templating;
 using System.Collections;
 using System.Reflection;
@@ -54,6 +56,7 @@ public partial class InstructService
     private async Task<Agent> BuildInnerAgent(InstructOptions? options)
     {
         Agent? agent = null;
+        AgentLlmConfig? llmConfig = null;
         string? instruction = null;
         
         if (!string.IsNullOrWhiteSpace(options?.AgentId))
@@ -63,8 +66,13 @@ public partial class InstructService
             
             if (!string.IsNullOrWhiteSpace(options?.TemplateName))
             {
-                var template = agent?.Templates?.FirstOrDefault(x => x.Name == options.TemplateName)?.Content ?? string.Empty;
-                instruction = BuildInstruction(template, options?.Data ?? []);
+                var template = agent?.Templates?.FirstOrDefault(x => x.Name.IsEqualTo(options.TemplateName));
+                instruction = BuildInstruction(template?.Content ?? string.Empty, options?.Data ?? []);
+                var templateLlmConfig = template?.LlmConfig;
+                if (templateLlmConfig?.IsValid == true)
+                {
+                    llmConfig = new AgentLlmConfig(templateLlmConfig);
+                }
             }
         }
 
@@ -73,7 +81,7 @@ public partial class InstructService
             Id = agent?.Id ?? Guid.Empty.ToString(),
             Name = agent?.Name ?? "Unknown",
             Instruction = instruction,
-            LlmConfig = agent?.LlmConfig ?? new()
+            LlmConfig = llmConfig ?? agent?.LlmConfig ?? new()
         };
     }
 
@@ -86,21 +94,22 @@ public partial class InstructService
 
     private async Task<RoleDialogModel> GetAiResponse(string text, Agent agent, InstructOptions? options)
     {
-        var dialogs = BuildDialogs(text, options);
+        var settingService = _services.GetRequiredService<ISettingService>();
+        var dialogs = await BuildDialogs(text, options);
         var provider = options?.Provider ?? agent?.LlmConfig?.Provider ?? "openai";
-        var model = options?.Model ?? agent?.LlmConfig?.Model ?? "gpt-4o";
+        var model = options?.Model ?? agent?.LlmConfig?.Model ?? Gpt4xModelConstants.GPT_4o;
         var completion = CompletionProvider.GetChatCompletion(_services, provider: provider, model: model);
         return await completion.GetChatCompletions(agent, dialogs);
     }
 
-    private List<RoleDialogModel> BuildDialogs(string text, InstructOptions? options)
+    private async Task<List<RoleDialogModel>> BuildDialogs(string text, InstructOptions? options)
     {
         var messages = new List<RoleDialogModel>();
 
         if (!string.IsNullOrWhiteSpace(options?.ConversationId))
         {
             var conv = _services.GetRequiredService<IConversationService>();
-            var dialogs = conv.GetDialogHistory();
+            var dialogs = await conv.GetDialogHistory();
             messages.AddRange(dialogs);
         }
 

@@ -3,11 +3,14 @@ using BotSharp.Abstraction.MLTasks;
 using BotSharp.Abstraction.Options;
 using BotSharp.Abstraction.Realtime;
 using BotSharp.Abstraction.Realtime.Models;
-using BotSharp.Abstraction.Realtime.Models.Session;
+using BotSharp.Abstraction.Realtime.Options;
+using BotSharp.Abstraction.Realtime.Sessions;
 using BotSharp.Abstraction.Routing;
 using BotSharp.Abstraction.Utilities;
+using BotSharp.Core.Infrastructures;
 using BotSharp.Core.Session;
 using BotSharp.Plugin.Twilio.Interfaces;
+using BotSharp.Plugin.Twilio.Models;
 using BotSharp.Plugin.Twilio.Models.Stream;
 using Microsoft.AspNetCore.Http;
 using System.Net.WebSockets;
@@ -23,7 +26,6 @@ public class TwilioStreamMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<TwilioStreamMiddleware> _logger;
-    private BotSharpRealtimeSession _session;
 
     public TwilioStreamMiddleware(
         RequestDelegate next,
@@ -52,7 +54,6 @@ public class TwilioStreamMiddleware
                 }
                 catch (Exception ex)
                 {
-                    _session?.Dispose();
                     _logger.LogError(ex, $"Error in WebSocket communication: {ex.Message} for conversation {conversationId}");
                 }
                 return;
@@ -64,8 +65,7 @@ public class TwilioStreamMiddleware
 
     private async Task HandleWebSocket(IServiceProvider services, string agentId, string conversationId, WebSocket webSocket)
     {
-        _session?.Dispose();
-        _session = new BotSharpRealtimeSession(services, webSocket, new ChatSessionOptions
+        using var session = new BotSharpRealtimeSession(services, webSocket, new ChatSessionOptions
         {
             Provider = "BotSharp Twilio Stream",
             BufferSize = 1024 * 32,
@@ -77,9 +77,18 @@ public class TwilioStreamMiddleware
         var conn = hub.SetHubConnection(conversationId);
         conn.CurrentAgentId = agentId;
 
+        // The media stream is a separate HTTP request, so the identity set on the inbound webhook does not carry over.
+        // Authenticate synchronously (so AsyncLocal identity writes survive) and before loading states:
+        var request = new ConversationalVoiceRequest
+        {
+            AgentId = agentId,
+            ConversationId = conversationId
+        };
+        HookEmitter.Emit<ITwilioSessionHook>(services, hook => hook.OnAuthenticate(request), agentId);
+
         // load conversation and state
         var convService = services.GetRequiredService<IConversationService>();
-        convService.SetConversationId(conversationId, []);
+        await convService.SetConversationId(conversationId, []);
 
         var hooks = services.GetHooks<ITwilioSessionHook>(agentId);
         foreach (var hook in hooks)
@@ -87,12 +96,12 @@ public class TwilioStreamMiddleware
             await hook.OnStreamingStarted(conn);
         }
 
-        convService.States.Save();
+        await convService.States.Save();
 
         var routing = services.GetRequiredService<IRoutingService>();
-        routing.Context.Push(agentId);
+        await routing.Context.Push(agentId);
 
-        await foreach (ChatSessionUpdate update in _session.ReceiveUpdatesAsync(CancellationToken.None))
+        await foreach (ChatSessionUpdate update in session.ReceiveUpdatesAsync(CancellationToken.None))
         {
             var receivedText = update?.RawResponse;
             if (string.IsNullOrEmpty(receivedText))
@@ -143,9 +152,8 @@ public class TwilioStreamMiddleware
             }
         }
 
-        convService.SaveStates();
-        await _session.DisconnectAsync();
-        _session.Dispose();
+        await convService.SaveStates();
+        await session.DisconnectAsync();
     }
 
     private async Task ConnectToModel(IRealtimeHub hub, WebSocket webSocket)
@@ -278,7 +286,7 @@ public class TwilioStreamMiddleware
         dialogs.Add(message);
 
         var storage = _services.GetRequiredService<IConversationStorage>();
-        storage.Append(conn.ConversationId, message);
+        await storage.Append(conn.ConversationId, message);
 
         var hooks = _services.GetHooksOrderByPriority<IConversationHook>(conn.CurrentAgentId);
         foreach (var hook in hooks)

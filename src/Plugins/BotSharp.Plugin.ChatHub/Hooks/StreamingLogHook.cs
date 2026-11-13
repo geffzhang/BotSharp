@@ -1,5 +1,4 @@
 using BotSharp.Abstraction.Conversations.Enums;
-using BotSharp.Abstraction.Routing.Enums;
 using BotSharp.Abstraction.Routing.Models;
 using Microsoft.AspNetCore.SignalR;
 using System.Runtime.CompilerServices;
@@ -21,6 +20,8 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
     private readonly IUserIdentity _user;
     private readonly IAgentService _agentService;
     private readonly IRoutingContext _routingCtx;
+
+    public override string SelfId => string.Empty;
 
     public StreamingLogHook(
         ConversationSetting convSettings,
@@ -61,7 +62,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.UserInput,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public override async Task OnPostbackMessageReceived(RoleDialogModel message, PostbackMessageModel replyMsg)
@@ -79,7 +80,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.UserInput,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnSessionUpdated(Agent agent, string instruction, FunctionDef[] functions, bool isInit = false)
@@ -108,7 +109,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.Prompt,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnRenderingTemplate(Agent agent, string name, string content)
@@ -130,7 +131,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.HardRule,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task BeforeGenerating(Agent agent, List<RoleDialogModel> conversations)
@@ -158,7 +159,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.FunctionCall,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public override async Task OnFunctionExecuted(RoleDialogModel message, InvokeFunctionOptions? options = null)
@@ -179,7 +180,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.FunctionCall,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     /// <summary>
@@ -197,16 +198,16 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
 
         var agent = await _agentService.GetAgent(message.CurrentAgentId);
 
-        var log = tokenStats.Prompt;
+        if (string.IsNullOrWhiteSpace(tokenStats.Prompt)) return;
 
         var input = new ContentLogInputModel(conversationId, message)
         {
             Name = agent?.Name,
             AgentId = agent?.Id,
             Source = ContentLogSource.Prompt,
-            Log = log
+            Log =  tokenStats.Prompt
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     /// <summary>
@@ -221,7 +222,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
 
         var conv = _services.GetRequiredService<IConversationService>();
         var routingCtx = _services.GetRequiredService<IRoutingContext>();
-        var stateLog = BuildStateLog(conv.ConversationId, routingCtx.EntryAgentId, _state.GetStates(), message);
+        var stateLog = await BuildStateLog(conv.ConversationId, routingCtx.EntryAgentId, _state.GetStates(), message);
         await SendEvent(ChatEvent.OnConversateStateLogGenerated, conv.ConversationId, stateLog);
 
         if (message.Role == AgentRole.Assistant)
@@ -241,7 +242,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
                 Source = ContentLogSource.AgentResponse,
                 Log = log
             };
-            await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+            await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
         }
     }
 
@@ -259,7 +260,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.FunctionCall,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public override async Task OnConversationEnding(RoleDialogModel message)
@@ -276,7 +277,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.FunctionCall,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public override async Task OnBreakpointUpdated(string conversationId, bool resetStates)
@@ -304,7 +305,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             },
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public override async Task OnStateChanged(StateChangeModel stateChange)
@@ -343,7 +344,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.HardRule,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnAgentDequeued(string agentId, string currentAgentId, string? reason = null)
@@ -371,7 +372,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.HardRule,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnAgentReplaced(string fromAgentId, string toAgentId, string? reason = null)
@@ -399,7 +400,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.HardRule,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnAgentQueueEmptied(string agentId, string? reason = null)
@@ -424,7 +425,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.HardRule,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnRoutingInstructionReceived(FunctionCallFromLlm instruct, RoleDialogModel message)
@@ -443,7 +444,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.AgentResponse,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
 
     public async Task OnRoutingInstructionRevised(FunctionCallFromLlm instruct, RoleDialogModel message)
@@ -461,7 +462,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
             Source = ContentLogSource.HardRule,
             Log = log
         };
-        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, BuildContentLog(input));
+        await SendEvent(ChatEvent.OnConversationContentLogGenerated, conversationId, await BuildContentLog(input));
     }
     #endregion
 
@@ -474,7 +475,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
         await EventEmitter.SendChatEvent(_services, _logger, @event, conversationId, user?.Id, json, nameof(StreamingLogHook), callerName);
     }
 
-    private ContentLogOutputModel BuildContentLog(ContentLogInputModel input)
+    private async Task<ContentLogOutputModel> BuildContentLog(ContentLogInputModel input)
     {
         var output = new ContentLogOutputModel
         {
@@ -492,13 +493,13 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
         if (convSettings.EnableContentLog)
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            db.SaveConversationContentLog(output);
+            await db.SaveConversationContentLog(output);
         }
 
         return output;
     }
 
-    private ConversationStateLogModel BuildStateLog(string conversationId, string agentId, Dictionary<string, string> states, RoleDialogModel message)
+    private async Task<ConversationStateLogModel> BuildStateLog(string conversationId, string agentId, Dictionary<string, string> states, RoleDialogModel message)
     {
         var log = new ConversationStateLogModel
         {
@@ -513,7 +514,7 @@ public class StreamingLogHook : ConversationHookBase, IContentGeneratingHook, IR
         if (convSettings.EnableStateLog)
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            db.SaveConversationStateLog(log);
+            await db.SaveConversationStateLog(log);
         }
 
         return log;

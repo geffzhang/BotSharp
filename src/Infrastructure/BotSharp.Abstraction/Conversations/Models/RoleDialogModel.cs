@@ -20,6 +20,11 @@ public class RoleDialogModel : ITrackableMessage
     public string MessageType { get; set; } = MessageTypeName.Plain;
 
     /// <summary>
+    /// When true, message is stored but omitted from default LLM history and routing <c>[CONVERSATION]</c> (orthogonal to <see cref="MessageType"/>).
+    /// </summary>
+    public bool ExcludeFromContext { get; set; }
+
+    /// <summary>
     /// The message label
     /// </summary>
     public string? MessageLabel { get; set; }
@@ -63,13 +68,36 @@ public class RoleDialogModel : ITrackableMessage
     public string? FunctionName { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ToolCallId { get; set; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PostbackFunctionName { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FunctionArgs { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolCallId { get; set; }
+
+    /// <summary>
+    /// Every tool call this reply asked for, in the order the model produced them, or null when
+    /// it asked for none.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FunctionName"/>, <see cref="FunctionArgs"/> and <see cref="ToolCallId"/> beside
+    /// this are the first entry, so a caller that can only run one call keeps working unchanged;
+    /// a caller that can run several reads this instead. The one difference is name repair: the
+    /// single field carries the normalized name it always has, while entries here keep the name
+    /// the model actually sent.
+    /// <para>
+    /// Deliberately not copied by <see cref="From"/>: this describes one model reply, and a
+    /// message derived from that reply -- a tool result, an assistant answer -- is not it.
+    /// </para>
+    /// </remarks>
+    public List<LlmToolCall>? ToolCalls { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string?>? Thought { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string?>? MetaData { get; set; }
 
     /// <summary>
     /// Set this flag is in OnFunctionExecuting, if true, it won't be executed by InvokeFunction.
@@ -110,6 +138,7 @@ public class RoleDialogModel : ITrackableMessage
     /// <summary>
     /// Files to be used in conversation
     /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<BotSharpFile>? Files { get; set; }
 
     /// <summary>
@@ -132,12 +161,26 @@ public class RoleDialogModel : ITrackableMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
     public bool IsStreaming { get; set; }
 
-    /// <summary>
-    /// Additional messages that can be sent sequentially and save to db
-    /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-    public ChatMessageWrapper? AdditionalMessageWrapper { get; set; }
+    public bool IsFromUser => Role == AgentRole.User;
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
+    public bool IsFromAssistant => Role == AgentRole.Assistant || Role == AgentRole.Model;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
+    public string LlmContent
+    {
+        get
+        {
+            var text = Content;
+            if (Role == AgentRole.User)
+            {
+                text = !string.IsNullOrWhiteSpace(Payload) ? Payload : Content;
+            }
+
+            return text;
+        }
+    }
 
     public RoleDialogModel()
     {
@@ -172,10 +215,11 @@ public class RoleDialogModel : ITrackableMessage
             CurrentAgentId = source.CurrentAgentId,
             MessageId = source.MessageId,
             MessageType = source.MessageType,
+            ExcludeFromContext = source.ExcludeFromContext,
             MessageLabel = source.MessageLabel,
-            FunctionArgs = source.FunctionArgs,
-            FunctionName = source.FunctionName,
             ToolCallId = source.ToolCallId,
+            FunctionName = source.FunctionName,
+            FunctionArgs = source.FunctionArgs,
             Indication = source.Indication,
             PostbackFunctionName = source.PostbackFunctionName,
             RichContent = source.RichContent,
@@ -185,25 +229,16 @@ public class RoleDialogModel : ITrackableMessage
             Data = source.Data,
             IsStreaming = source.IsStreaming,
             Annotations = source.Annotations,
-            AdditionalMessageWrapper = source.AdditionalMessageWrapper
+            Thought = source.Thought != null ? new(source.Thought) : null,
+            MetaData = source.MetaData != null ? new(source.MetaData) : null
         };
     }
-}
 
-public class ChatMessageWrapper
-{
-    /// <summary>
-    /// Messages sending interval in milliseconds
-    /// </summary>
-    public int SendingInterval { get; set; }
-
-    /// <summary>
-    /// Whether the Messages are saved to db
-    /// </summary>
-    public bool SaveToDb { get; set; }
-
-    /// <summary>
-    /// Messages to send or save
-    /// </summary>
-    public List<RoleDialogModel>? Messages { get; set; }
+    public void ClearMessage()
+    {
+        this.Payload = null;
+        this.RichContent = null;
+        this.SecondaryContent = null;
+        this.SecondaryRichContent = null;
+    }
 }

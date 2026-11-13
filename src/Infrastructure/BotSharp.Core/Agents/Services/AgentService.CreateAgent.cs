@@ -11,7 +11,7 @@ public partial class AgentService
     public async Task<Agent> CreateAgent(Agent agent)
     {
         var userIdentity = _services.GetRequiredService<IUserIdentity>();
-        var userAgents = _db.GetUserAgents(userIdentity.Id);
+        var userAgents = await _db.GetUserAgents(userIdentity.Id);
         var found = userAgents?.FirstOrDefault(x => x.Agent != null && x.Agent.Name.IsEqualTo(agent.Name));
         if (found != null)
         {
@@ -19,27 +19,27 @@ public partial class AgentService
         }
 
         var agentRecord = Agent.Clone(agent);
-        agentRecord.Id = Guid.NewGuid().ToString();
+        agentRecord.Id = !string.IsNullOrEmpty(agent.Id) ? agent.Id : Guid.NewGuid().ToString();
         agentRecord.CreatedDateTime = DateTime.UtcNow;
         agentRecord.UpdatedDateTime = DateTime.UtcNow;
 
         var dbSettings = _services.GetRequiredService<BotSharpDatabaseSettings>();
         var agentSettings = _services.GetRequiredService<AgentSettings>();
 
-        var user = _db.GetUserById(userIdentity.Id);
+        var user = await _db.GetUserById(userIdentity.Id);
         var userService = _services.GetRequiredService<IUserService>();
         var auth = await userService.GetUserAuthorizations();
 
-        _db.BulkInsertAgents(new List<Agent> { agentRecord });
+        await _db.BulkInsertAgents([agentRecord]);
         if (auth.IsAdmin || auth.Permissions.Contains(UserPermission.CreateAgent))
         {
-            _db.BulkInsertUserAgents(new List<UserAgent>
+            await _db.BulkInsertUserAgents(new List<UserAgent>
             {
                 new UserAgent
                 {
                     UserId = user.Id,
                     AgentId = agentRecord.Id,
-                    Actions = new List<string> { UserAction.Edit, UserAction.Train, UserAction.Evaluate, UserAction.Chat },
+                    Actions = [UserAction.Edit, UserAction.Train, UserAction.Evaluate, UserAction.Chat],
                     CreatedTime = DateTime.UtcNow,
                     UpdatedTime = DateTime.UtcNow
                 }
@@ -47,7 +47,7 @@ public partial class AgentService
         }
 
         Utilities.ClearCache();
-        return await Task.FromResult(agentRecord);
+        return agentRecord;
     }
 
     private (string, List<ChannelInstruction>) GetInstructionsFromFile(string fileDir)
@@ -98,6 +98,9 @@ public partial class AgentService
         var templateDir = Path.Combine(fileDir, "templates");
         if (!Directory.Exists(templateDir)) return templates;
 
+        // Load template configs
+        var configs = GetAgentTemplateConfigs(fileDir);
+
         foreach (var file in Directory.GetFiles(templateDir))
         {
             var extension = Path.GetExtension(file).Substring(1);
@@ -105,11 +108,38 @@ public partial class AgentService
             {
                 var name = Path.GetFileNameWithoutExtension(file);
                 var content = File.ReadAllText(file);
-                templates.Add(new AgentTemplate(name, content));
+                var template = new AgentTemplate(name, content);
+                var config = configs.FirstOrDefault(x => x.Name.IsEqualTo(name));
+                if (config != null)
+                {
+                    template.LlmConfig = config.LlmConfig;
+                }
+                templates.Add(template);
             }
         }
-        
+
         return templates;
+    }
+
+    private IEnumerable<AgentTemplateConfig> GetAgentTemplateConfigs(string baseDir)
+    {
+        var configFile = Path.Combine(baseDir, "template-configs.json");
+        var configs = new List<AgentTemplateConfig>();
+
+        try
+        {
+            if (File.Exists(configFile))
+            {
+                var configJson = File.ReadAllText(configFile);
+                configs = JsonSerializer.Deserialize<List<AgentTemplateConfig>>(configJson, _options.JsonSerializerOptions) ?? [];
+            }
+            return configs;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error when loading template configs in {configFile}", configFile);
+            return configs;
+        }
     }
 
     private List<FunctionDef> GetFunctionsFromFile(string fileDir)
@@ -127,7 +157,7 @@ public partial class AgentService
                 if (extension != "json") continue;
 
                 var json = File.ReadAllText(file);
-                var function = JsonSerializer.Deserialize<FunctionDef>(json, _options);
+                var function = JsonSerializer.Deserialize<FunctionDef>(json, _options.JsonSerializerOptions);
                 functions.Add(function);
             }
             catch
@@ -217,5 +247,34 @@ public partial class AgentService
         var content = Regex.Match(data, pattern, RegexOptions.Singleline).Value;
         task.Content = content.Substring(suffix.Length).Trim();
         return task;
+    }
+
+    private List<AgentCodeScript> GetCodeScriptsFromFile(string fileDir)
+    {
+        var scripts = new List<AgentCodeScript>();
+        var codeDir = Path.Combine(fileDir, "codes");
+        if (!Directory.Exists(codeDir))
+        {
+            return scripts;
+        }
+
+        var agentId = fileDir.Split(Path.DirectorySeparatorChar).Last();
+
+        foreach (var folder in Directory.EnumerateDirectories(codeDir))
+        {
+            var scriptType = folder.Split(Path.DirectorySeparatorChar).Last();
+            foreach (var file in Directory.EnumerateFiles(folder))
+            {
+                scripts.Add(new AgentCodeScript
+                {
+                    AgentId = agentId,
+                    Name = Path.GetFileName(file),
+                    ScriptType = scriptType,
+                    Content = File.ReadAllText(file)
+                });
+            }
+        }
+
+        return scripts;
     }
 }

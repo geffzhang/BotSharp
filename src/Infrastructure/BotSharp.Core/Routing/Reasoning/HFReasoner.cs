@@ -55,7 +55,7 @@ public class HFReasoner : IRoutingReasoner
         var inst = response.Content.JsonContent<FunctionCallFromLlm>();
 
         // Fix LLM malformed response
-        ReasonerHelper.FixMalformedResponse(_services, inst);
+        await ReasonerHelper.FixMalformedResponse(_services, inst);
 
         return inst;
     }
@@ -66,10 +66,10 @@ public class HFReasoner : IRoutingReasoner
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
             var filter = new AgentFilter { AgentNames = [inst.AgentName] };
-            var agent = db.GetAgents(filter).FirstOrDefault();
+            var agent = (await db.GetAgents(filter)).FirstOrDefault();
 
             var context = _services.GetRequiredService<IRoutingContext>();
-            context.Push(agent.Id, reason: inst.NextActionReason);
+            await context.Push(agent.Id, reason: inst.NextActionReason);
 
             // Set user content as Planner's question
             message.FunctionName = inst.Function;
@@ -82,7 +82,7 @@ public class HFReasoner : IRoutingReasoner
     public async Task<bool> AgentExecuted(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
     {
         var context = _services.GetRequiredService<IRoutingContext>();
-        context.Empty(reason: $"Agent queue is cleared by {nameof(HFReasoner)}");
+        await context.Empty(reason: $"Agent queue is cleared by {nameof(HFReasoner)}");
         return true;
     }
 

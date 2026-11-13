@@ -1,4 +1,4 @@
-using BotSharp.Abstraction.Routing.Enums;
+using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Abstraction.Routing.Settings;
 
 namespace BotSharp.Core.Routing.Hooks;
@@ -14,18 +14,18 @@ public class RoutingAgentHook : AgentHookBase
         _routingSetting = routingSetting;
     }
 
-    public override bool OnInstructionLoaded(string template, Dictionary<string, object> dict)
+    public override async Task<bool> OnInstructionLoaded(string template, IDictionary<string, object> dict)
     {
         if (_agent.Type != AgentType.Routing)
         {
-            return base.OnInstructionLoaded(template, dict);
+            return await base.OnInstructionLoaded(template, dict);
         }
         dict["router"] = _agent;
 
         var routing = _services.GetRequiredService<IRoutingService>();
-        var agents = routing.GetRoutableAgents(_agent.Profiles);
+        var agents = await routing.GetRoutableAgents(_agent.Profiles);
 
-        // 过滤 Planner
+        // filter Planner
         var planningRule = _agent.RoutingRules.FirstOrDefault(x => x.Type == "planner");
         if (planningRule != null)
         {
@@ -33,48 +33,41 @@ public class RoutingAgentHook : AgentHookBase
             agents = agents.Except(planners).ToArray();
         }
 
-        // Postprocess agent required fields, remove it if the states exists
+        // GetRoutableAgents is cached and shared by every conversation: build this conversation's view
+        // without the fields it already has, instead of removing them from the cached agents.
         var states = _services.GetRequiredService<IConversationStateService>();
-        foreach (var agent in agents)
+        agents = agents.Select(x => new RoutableAgent
         {
-            var fields = agent.RequiredFields.ToArray();
-            foreach (var field in fields)
-            {
-                if (states.ContainsState(field.Name))
-                {
-                    var requiredField = agent.RequiredFields.First(x => x.Name == field.Name);
-                    agent.RequiredFields.Remove(requiredField);
-                }
-            }
-
-            fields = agent.OptionalFields.ToArray();
-            foreach (var field in fields)
-            {
-                if (states.ContainsState(field.Name))
-                {
-                    var optionalField = agent.OptionalFields.First(x => x.Name == field.Name);
-                    agent.OptionalFields.Remove(optionalField);
-                }
-            }
-        }
+            AgentId = x.AgentId,
+            Name = x.Name,
+            Description = x.Description,
+            Type = x.Type,
+            Profiles = x.Profiles,
+            RequiredFields = x.RequiredFields.Where(f => !states.ContainsState(f.Name)).ToList(),
+            OptionalFields = x.OptionalFields.Where(f => !states.ContainsState(f.Name)).ToList()
+        }).ToArray();
 
         dict["routing_agents"] = agents;
 
-        return base.OnInstructionLoaded(template, dict);
+        return await base.OnInstructionLoaded(template, dict);
     }
 
-    public override bool OnFunctionsLoaded(List<FunctionDef> functions)
+    public override async Task<bool> OnFunctionsLoaded(List<FunctionDef> functions)
     {
         if (_agent.Type == AgentType.Task)
         {
             // check if enabled the routing rule
             var routing = _services.GetRequiredService<IRoutingService>();
-            var rule = routing.GetRulesByAgentId(_agent.Id)
-                .FirstOrDefault(x => x.Type == RuleType.Fallback);
+            var rules = (await routing.GetRulesByAgentId(_agent.Id)).ToList();
+            if (!rules.IsNullOrEmpty())
+            {
+                await HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnRoutingRulesLoaded(_agent.Id, rules), _agent.Id);
+            }
+            var rule = rules.FirstOrDefault(x => x.Type == RuleType.Fallback);
             if (rule != null)
             {
                 var agentService = _services.GetRequiredService<IAgentService>();
-                var redirectAgent = agentService.GetAgent(rule.RedirectTo).Result;
+                var redirectAgent = await agentService.GetAgent(rule.RedirectTo);
 
                 var json = JsonSerializer.Serialize(new
                 {
@@ -112,6 +105,6 @@ public class RoutingAgentHook : AgentHookBase
             }
         }
 
-        return base.OnFunctionsLoaded(functions);
+        return await base.OnFunctionsLoaded(functions);
     }
 }

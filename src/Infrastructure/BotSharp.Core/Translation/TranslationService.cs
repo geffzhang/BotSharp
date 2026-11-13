@@ -92,7 +92,7 @@ public class TranslationService : ITranslationService
 
         if (_convSettings.EnableTranslationMemory)
         {
-            var memories = _db.GetTranslationMemories(queries);
+            var memories = await _db.GetTranslationMemories(queries);
             var memoryHashes = memories.Select(x => x.HashText).ToList();
 
             foreach (var memory in memories)
@@ -149,7 +149,7 @@ public class TranslationService : ITranslationService
 
                 if (_convSettings.EnableTranslationMemory)
                 {
-                    _db.SaveTranslationMemories(memoryInputs);
+                    await _db.SaveTranslationMemories(memoryInputs);
                 }
             }
             
@@ -380,11 +380,12 @@ public class TranslationService : ITranslationService
             Id = Guid.Empty.ToString(),
             Name = "Translator",
             Instruction = "You are a translation expert.",
-            TemplateDict = new Dictionary<string, object>
+            LlmConfig = _router?.LlmConfig,
+            TemplateDict = new()
             {
-                { "text_list",  jsonString },
-                { "text_list_size", texts.Count },
-                { StateConst.LANGUAGE, language }
+                ["text_list"] = jsonString,
+                ["text_list_size"] = texts.Count,
+                [StateConst.LANGUAGE] = language
             }
         };
 

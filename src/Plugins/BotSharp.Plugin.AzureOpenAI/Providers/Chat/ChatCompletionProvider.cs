@@ -1,4 +1,7 @@
+#pragma warning disable OPENAI001
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Conversations.Enums;
+using BotSharp.Abstraction.Utilities;
 using BotSharp.Abstraction.Files.Utilities;
 using BotSharp.Abstraction.Hooks;
 using BotSharp.Abstraction.MessageHub.Models;
@@ -60,21 +63,32 @@ public class ChatCompletionProvider : IChatCompletion
 
             if (reason == ChatFinishReason.FunctionCall || reason == ChatFinishReason.ToolCalls)
             {
+                _logger.LogInformation($"Action: {nameof(GetChatCompletions)}, Reason: {reason}, Agent: {agent.Name}, ToolCalls: {string.Join(",", value.ToolCalls.Select(x => x.FunctionName))}");
+                
                 var toolCall = value.ToolCalls.FirstOrDefault();
                 responseMessage = new RoleDialogModel(AgentRole.Function, text)
                 {
                     CurrentAgentId = agent.Id,
                     MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                    ToolCallId = toolCall?.Id,
                     FunctionName = toolCall?.FunctionName,
                     FunctionArgs = toolCall?.FunctionArguments?.ToString(),
                     RenderedInstruction = string.Join("\r\n", renderedInstructions)
                 };
 
                 // Somethings LLM will generate a function name with agent name.
-                if (!string.IsNullOrEmpty(responseMessage.FunctionName))
+                responseMessage.FunctionName = responseMessage.FunctionName.NormalizeFunctionName();
+            }
+            else if (reason == ChatFinishReason.Length)
+            {
+                _logger.LogWarning($"Action: {nameof(GetChatCompletions)}, Reason: {reason}, Agent: {agent.Name}, MaxOutputTokens: {options.MaxOutputTokenCount}, Content:{text}");
+
+                responseMessage = new RoleDialogModel(AgentRole.Assistant, $"AI response exceeded max output length")
                 {
-                    responseMessage.FunctionName = responseMessage.FunctionName.Split('.').Last();
-                }
+                    CurrentAgentId = agent.Id,
+                    MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                    StopCompletion = true
+                };
             }
             else
             {
@@ -82,7 +96,14 @@ public class ChatCompletionProvider : IChatCompletion
                 {
                     CurrentAgentId = agent.Id,
                     MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
-                    RenderedInstruction = string.Join("\r\n", renderedInstructions)
+                    RenderedInstruction = string.Join("\r\n", renderedInstructions),
+                    Annotations = value.Annotations?.Select(x => new ChatAnnotation
+                    {
+                        Title = x.WebResourceTitle,
+                        Url = x.WebResourceUri.AbsoluteUri,
+                        StartIndex = x.StartIndex,
+                        EndIndex = x.EndIndex
+                    })?.ToList()
                 };
             }
         }
@@ -189,17 +210,40 @@ public class ChatCompletionProvider : IChatCompletion
             };
 
             // Somethings LLM will generate a function name with agent name.
-            if (!string.IsNullOrEmpty(funcContextIn.FunctionName))
-            {
-                funcContextIn.FunctionName = funcContextIn.FunctionName.Split('.').Last();
-            }
+            funcContextIn.FunctionName = funcContextIn.FunctionName.NormalizeFunctionName();
 
             // Execute functions
             await onFunctionExecuting(funcContextIn);
         }
+        else if (reason == ChatFinishReason.Length)
+        {
+            _logger.LogWarning($"Action: {nameof(GetChatCompletionsAsync)}, Reason: {reason}, Agent: {agent.Name}, MaxOutputTokens: {options.MaxOutputTokenCount}, Content:{text}");
+
+            msg = new RoleDialogModel(AgentRole.Assistant, $"AI response exceeded max output length")
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                StopCompletion = true,
+                RenderedInstruction = string.Join("\r\n", renderedInstructions)
+            };
+            await onMessageReceived(msg);
+        }
         else
         {
             // Text response received
+            msg = new RoleDialogModel(AgentRole.Assistant, text)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                RenderedInstruction = string.Join("\r\n", renderedInstructions),
+                Annotations = value.Annotations?.Select(x => new ChatAnnotation
+                {
+                    Title = x.WebResourceTitle,
+                    Url = x.WebResourceUri.AbsoluteUri,
+                    StartIndex = x.StartIndex,
+                    EndIndex = x.EndIndex
+                })?.ToList()
+            };
             await onMessageReceived(msg);
         }
 
@@ -244,70 +288,92 @@ public class ChatCompletionProvider : IChatCompletion
             MessageId = messageId
         };
 
-        await foreach (var choice in chatClient.CompleteChatStreamingAsync(messages, options))
+        var streamingCancellation = _services.GetRequiredService<IConversationCancellationService>();
+        var cancellationToken = streamingCancellation.GetToken(conv.ConversationId);
+
+        try
         {
-            tokenUsage = choice.Usage;
-
-            if (!choice.ToolCallUpdates.IsNullOrEmpty())
+            await foreach (var choice in chatClient.CompleteChatStreamingAsync(messages, options, cancellationToken))
             {
-                toolCalls.AddRange(choice.ToolCallUpdates);
-            }
+                tokenUsage = choice.Usage;
 
-            if (!choice.ContentUpdate.IsNullOrEmpty())
-            {
-                var text = choice.ContentUpdate[0]?.Text ?? string.Empty;
-                textStream.Collect(text);
+                if (!choice.ToolCallUpdates.IsNullOrEmpty())
+                {
+                    toolCalls.AddRange(choice.ToolCallUpdates);
+                }
+
+                if (!choice.ContentUpdate.IsNullOrEmpty())
+                {
+                    var text = choice.ContentUpdate[0]?.Text ?? string.Empty;
+                    textStream.Collect(text);
 
 #if DEBUG
-                _logger.LogCritical($"Content update: {text}");
+                    _logger.LogCritical($"Content update: {text}");
 #endif
 
-                var content = new RoleDialogModel(AgentRole.Assistant, text)
-                {
-                    CurrentAgentId = agent.Id,
-                    MessageId = messageId
-                };
-                hub.Push(new()
-                {
-                    EventName = ChatEvent.OnReceiveLlmStreamMessage,
-                    RefId = conv.ConversationId,
-                    Data = content
-                });
-            }
+                    var content = new RoleDialogModel(AgentRole.Assistant, text)
+                    {
+                        CurrentAgentId = agent.Id,
+                        MessageId = messageId
+                    };
+                    hub.Push(new()
+                    {
+                        EventName = ChatEvent.OnReceiveLlmStreamMessage,
+                        RefId = conv.ConversationId,
+                        Data = content
+                    });
+                }
 
-            if (choice.FinishReason == ChatFinishReason.ToolCalls || choice.FinishReason == ChatFinishReason.FunctionCall)
-            {
-                var meta = toolCalls.FirstOrDefault(x => !string.IsNullOrEmpty(x.FunctionName));
-                var functionName = meta?.FunctionName;
-                var toolCallId = meta?.ToolCallId;
-                var args = toolCalls.Where(x => x.FunctionArgumentsUpdate != null).Select(x => x.FunctionArgumentsUpdate.ToString()).ToList();
-                var functionArgument = string.Join(string.Empty, args);
+                if (choice.FinishReason == ChatFinishReason.ToolCalls || choice.FinishReason == ChatFinishReason.FunctionCall)
+                {
+                    var meta = toolCalls.FirstOrDefault(x => !string.IsNullOrEmpty(x.FunctionName));
+                    var functionName = meta?.FunctionName;
+                    var toolCallId = meta?.ToolCallId;
+                    var args = toolCalls.Where(x => x.FunctionArgumentsUpdate != null).Select(x => x.FunctionArgumentsUpdate.ToString()).ToList();
+                    var functionArgument = string.Join(string.Empty, args);
 
 #if DEBUG
-                _logger.LogCritical($"Tool Call (id: {toolCallId}) => {functionName}({functionArgument})");
+                    _logger.LogCritical($"Tool Call (id: {toolCallId}) => {functionName}({functionArgument})");
 #endif
 
-                responseMessage = new RoleDialogModel(AgentRole.Function, string.Empty)
+                    responseMessage = new RoleDialogModel(AgentRole.Function, string.Empty)
+                    {
+                        CurrentAgentId = agent.Id,
+                        MessageId = messageId,
+                        ToolCallId = toolCallId,
+                        FunctionName = functionName,
+                        FunctionArgs = functionArgument
+                    };
+                }
+                else if (choice.FinishReason.HasValue)
                 {
-                    CurrentAgentId = agent.Id,
-                    MessageId = messageId,
-                    ToolCallId = toolCallId,
-                    FunctionName = functionName,
-                    FunctionArgs = functionArgument
-                };
-            }
-            else if (choice.FinishReason.HasValue)
-            {
-                var allText = textStream.GetText();
-                _logger.LogCritical($"Text Content: {allText}");
+                    var allText = textStream.GetText();
+                    _logger.LogCritical($"Text Content: {allText}");
 
-                responseMessage = new RoleDialogModel(AgentRole.Assistant, allText)
-                {
-                    CurrentAgentId = agent.Id,
-                    MessageId = messageId,
-                    IsStreaming = true
-                };
+                    responseMessage = new RoleDialogModel(AgentRole.Assistant, allText)
+                    {
+                        CurrentAgentId = agent.Id,
+                        MessageId = messageId,
+                        IsStreaming = true
+                    };
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Streaming was cancelled for conversation {ConversationId}", conv.ConversationId);
+        }
+
+        // Build responseMessage from collected text when cancelled before FinishReason
+        if (cancellationToken.IsCancellationRequested && string.IsNullOrEmpty(responseMessage.Content))
+        {
+            var allText = textStream.GetText();
+            responseMessage = new RoleDialogModel(AgentRole.Assistant, allText)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = messageId,
+                IsStreaming = true
+            };
         }
 
         hub.Push(new()
@@ -347,36 +413,34 @@ public class ChatCompletionProvider : IChatCompletion
         renderedInstructions = [];
 
         var messages = new List<ChatMessage>();
-
-        var temperature = float.Parse(state.GetState("temperature", "0.0"));
-        var maxTokens = int.TryParse(state.GetState("max_tokens"), out var tokens)
-                            ? tokens
-                            : agent.LlmConfig?.MaxOutputTokens ?? LlmConstant.DEFAULT_MAX_OUTPUT_TOKEN;
-
-        var options = new ChatCompletionOptions()
-        {
-            Temperature = temperature,
-            MaxOutputTokenCount = maxTokens
-        };
+        var options = InitChatCompletionOption(agent);
 
         // Prepare instruction and functions
-        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent);
+        var renderData = agentService.CollectRenderData(agent);
+        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent, renderData);
         if (!string.IsNullOrWhiteSpace(instruction))
         {
             renderedInstructions.Add(instruction);
             messages.Add(new SystemChatMessage(instruction));
         }
 
-        foreach (var function in functions)
+        // Render functions
+        if (options.WebSearchOptions == null)
         {
-            if (!agentService.RenderFunction(agent, function)) continue;
+            foreach (var function in functions)
+            {
+                if (!agentService.RenderFunction(agent, function, renderData))
+                {
+                    continue;
+                }
 
-            var property = agentService.RenderFunctionProperty(agent, function);
+                var property = agentService.RenderFunctionProperty(agent, function, renderData);
 
-            options.Tools.Add(ChatTool.CreateFunctionTool(
-                functionName: function.Name,
-                functionDescription: function.Description,
-                functionParameters: BinaryData.FromObjectAsJson(property)));
+                options.Tools.Add(ChatTool.CreateFunctionTool(
+                    functionName: function.Name,
+                    functionDescription: function.Description,
+                    functionParameters: BinaryData.FromObjectAsJson(property)));
+            }
         }
 
         if (!string.IsNullOrEmpty(agent.Knowledges))
@@ -397,6 +461,12 @@ public class ChatCompletionProvider : IChatCompletion
             filteredMessages = filteredMessages.Where((_, idx) => idx >= firstUserMsgIdx).ToList();
         }
 
+        var imageDetailLevel = ChatImageDetailLevel.Auto;
+        if (allowMultiModal)
+        {
+            imageDetailLevel = ParseChatImageDetailLevel(state.GetState(LlmStateConst.CHAT_IMAGE_DETAIL_LEVEL));
+        }
+
         foreach (var message in filteredMessages)
         {
             if (message.Role == AgentRole.Function)
@@ -406,49 +476,64 @@ public class ChatCompletionProvider : IChatCompletion
                     ChatToolCall.CreateFunctionToolCall(message.ToolCallId.IfNullOrEmptyAs(message.FunctionName), message.FunctionName, BinaryData.FromString(message.FunctionArgs ?? "{}"))
                 }));
 
-                messages.Add(new ToolChatMessage(message.ToolCallId.IfNullOrEmptyAs(message.FunctionName), message.Content));
+                messages.Add(new ToolChatMessage(message.ToolCallId.IfNullOrEmptyAs(message.FunctionName), message.LlmContent));
             }
             else if (message.Role == AgentRole.User)
             {
-                var text = !string.IsNullOrWhiteSpace(message.Payload) ? message.Payload : message.Content;
+                var text = message.LlmContent;
                 var textPart = ChatMessageContentPart.CreateTextPart(text);
                 var contentParts = new List<ChatMessageContentPart> { textPart };
 
                 if (allowMultiModal && !message.Files.IsNullOrEmpty())
                 {
-                    foreach (var file in message.Files)
-                    {
-                        if (!string.IsNullOrEmpty(file.FileData))
-                        {
-                            var (contentType, binary) = FileUtility.GetFileInfoFromData(file.FileData);
-                            var contentPart = ChatMessageContentPart.CreateImagePart(binary, contentType.IfNullOrEmptyAs(file.ContentType), ChatImageDetailLevel.Auto);
-                            contentParts.Add(contentPart);
-                        }
-                        else if (!string.IsNullOrEmpty(file.FileStorageUrl))
-                        {
-                            var contentType = FileUtility.GetFileContentType(file.FileStorageUrl);
-                            var binary = fileStorage.GetFileBytes(file.FileStorageUrl);
-                            var contentPart = ChatMessageContentPart.CreateImagePart(binary, contentType.IfNullOrEmptyAs(file.ContentType), ChatImageDetailLevel.Auto);
-                            contentParts.Add(contentPart);
-                        }
-                        else if (!string.IsNullOrEmpty(file.FileUrl))
-                        {
-                            var uri = new Uri(file.FileUrl);
-                            var contentPart = ChatMessageContentPart.CreateImagePart(uri, ChatImageDetailLevel.Auto);
-                            contentParts.Add(contentPart);
-                        }
-                    }
+                    CollectMessageContentParts(contentParts, message.Files, imageDetailLevel);
                 }
                 messages.Add(new UserChatMessage(contentParts) { ParticipantName = message.FunctionName });
             }
             else if (message.Role == AgentRole.Assistant)
             {
-                messages.Add(new AssistantChatMessage(message.Content));
+                var text = message.LlmContent;
+                var textPart = ChatMessageContentPart.CreateTextPart(text);
+                var contentParts = new List<ChatMessageContentPart> { textPart };
+
+                if (allowMultiModal && !message.Files.IsNullOrEmpty())
+                {
+                    CollectMessageContentParts(contentParts, message.Files, imageDetailLevel);
+                }
+                messages.Add(new AssistantChatMessage(contentParts));
             }
         }
 
         var prompt = GetPrompt(messages, options);
         return (prompt, messages, options);
+    }
+
+
+    private void CollectMessageContentParts(List<ChatMessageContentPart> contentParts, List<BotSharpFile> files, ChatImageDetailLevel imageDetailLevel)
+    {
+        foreach (var file in files)
+        {
+            if (!string.IsNullOrEmpty(file.FileData))
+            {
+                var (contentType, binary) = FileUtility.GetFileInfoFromData(file.FileData);
+                var contentPart = ChatMessageContentPart.CreateImagePart(binary, contentType.IfNullOrEmptyAs(file.ContentType), imageDetailLevel);
+                contentParts.Add(contentPart);
+            }
+            else if (!string.IsNullOrEmpty(file.FileStorageUrl))
+            {
+                var fileStorage = _services.GetRequiredService<IFileStorageService>();
+                var binary = fileStorage.GetFileBytes(file.FileStorageUrl);
+                var contentType = FileUtility.GetFileContentType(file.FileStorageUrl);
+                var contentPart = ChatMessageContentPart.CreateImagePart(binary, contentType.IfNullOrEmptyAs(file.ContentType), imageDetailLevel);
+                contentParts.Add(contentPart);
+            }
+            else if (!string.IsNullOrEmpty(file.FileUrl))
+            {
+                var uri = new Uri(file.FileUrl);
+                var contentPart = ChatMessageContentPart.CreateImagePart(uri, imageDetailLevel);
+                contentParts.Add(contentPart);
+            }
+        }
     }
 
     private string GetPrompt(IEnumerable<ChatMessage> messages, ChatCompletionOptions options)
@@ -516,6 +601,94 @@ public class ChatCompletionProvider : IChatCompletion
         }
 
         return prompt;
+    }
+
+    private ChatCompletionOptions InitChatCompletionOption(Agent agent)
+    {
+        var state = _services.GetRequiredService<IConversationStateService>();
+        var settingsService = _services.GetRequiredService<ILlmProviderService>();
+        var settings = settingsService.GetSetting(Provider, _model);
+
+        // Reasoning effort
+        ChatReasoningEffortLevel? reasoningEffortLevel = null;
+        float? temperature = state.GetState(LlmStateConst.TEMPERATURE, 0.0f);
+        if (settings?.Reasoning != null)
+        {
+            temperature = settings.Reasoning.Temperature;
+            var level = state.GetState(LlmStateConst.REASONING_EFFORT_LEVEL)
+                         .IfNullOrEmptyAs(agent?.LlmConfig?.ReasoningEffortLevel)
+                         .IfNullOrEmptyAs(settings?.Reasoning?.EffortLevel);
+            reasoningEffortLevel = ParseReasoningEffortLevel(level);
+        }
+
+        // Web search
+        ChatWebSearchOptions? webSearchOptions = null;
+        if (settings?.WebSearch != null)
+        {
+            temperature = null;
+            reasoningEffortLevel = null;
+            webSearchOptions = new();
+        }
+
+        var maxTokens = state.GetState<int?>(LlmStateConst.MAX_TOKENS)
+                        ?? agent.LlmConfig?.MaxOutputTokens ?? LlmConstant.DEFAULT_MAX_OUTPUT_TOKEN;
+
+        return new ChatCompletionOptions()
+        {
+            Temperature = temperature,
+            MaxOutputTokenCount = maxTokens,
+            ReasoningEffortLevel = reasoningEffortLevel,
+            WebSearchOptions = webSearchOptions
+        };
+    }
+
+    private ChatReasoningEffortLevel? ParseReasoningEffortLevel(string? level)
+    {
+        if (string.IsNullOrWhiteSpace(level))
+        {
+            return null;
+        }
+
+        var effortLevel = new ChatReasoningEffortLevel("minimal");
+        switch (level.ToLower())
+        {
+            case "low":
+                effortLevel = ChatReasoningEffortLevel.Low;
+                break;
+            case "medium":
+                effortLevel = ChatReasoningEffortLevel.Medium;
+                break;
+            case "high":
+                effortLevel = ChatReasoningEffortLevel.High;
+                break;
+            default:
+                break;
+        }
+
+        return effortLevel;
+    }
+
+    private ChatImageDetailLevel ParseChatImageDetailLevel(string? level)
+    {
+        if (string.IsNullOrWhiteSpace(level))
+        {
+            return ChatImageDetailLevel.Auto;
+        }
+
+        var imageLevel = ChatImageDetailLevel.Auto;
+        switch (level.ToLower())
+        {
+            case "low":
+                imageLevel = ChatImageDetailLevel.Low;
+                break;
+            case "high":
+                imageLevel = ChatImageDetailLevel.High;
+                break;
+            default:
+                break;
+        }
+
+        return imageLevel;
     }
 
     public void SetModelName(string model)

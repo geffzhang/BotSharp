@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Conversations.Settings;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
@@ -11,30 +12,24 @@ public class HandleEmailSenderFn : IFunctionCallback
 
     private readonly IServiceProvider _services;
     private readonly ILogger<HandleEmailSenderFn> _logger;
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IHttpContextAccessor _context;
     private readonly BotSharpOptions _options;
     private readonly EmailSenderSettings _emailSettings;
 
     public HandleEmailSenderFn(
         IServiceProvider services,
         ILogger<HandleEmailSenderFn> logger,
-        IHttpClientFactory httpClientFactory,
-        IHttpContextAccessor context,
         BotSharpOptions options,
         EmailSenderSettings emailPluginSettings)
     {
         _services = services;
         _logger = logger;
-        _httpClientFactory = httpClientFactory;
-        _context = context;
         _options = options;
         _emailSettings = emailPluginSettings;
     }
     public async Task<bool> Execute(RoleDialogModel message)
     {
         var args = JsonSerializer.Deserialize<LlmContextIn>(message.FunctionArgs, _options.JsonSerializerOptions);
-        var recipient = args?.ToAddress;
+        var recipients = args?.ToAddresses?.Where(x => !string.IsNullOrWhiteSpace(x)) ?? [];
         var body = args?.Content;
         var subject = args?.Subject;
         var isNeedAttachments = args?.IsNeedAttachemnts ?? false;
@@ -44,7 +39,12 @@ public class HandleEmailSenderFn : IFunctionCallback
         {
             var mailMessage = new MimeMessage();
             mailMessage.From.Add(new MailboxAddress(_emailSettings.Name, _emailSettings.EmailAddress));
-            mailMessage.To.Add(new MailboxAddress("", recipient));
+
+            foreach (var recipient in recipients)
+            {
+                mailMessage.To.Add(new MailboxAddress("", recipient));
+            }
+
             mailMessage.Subject = subject;
             bodyBuilder.TextBody = body;
 
@@ -58,7 +58,7 @@ public class HandleEmailSenderFn : IFunctionCallback
             var response = await SendEmailBySMTP(mailMessage);
             message.Content = response;
 
-            _logger.LogWarning($"Email successfully send over to {recipient}. Email Subject: {subject} [{response}]");
+            _logger.LogWarning($"Email successfully send over to {string.Join(",", recipients)}. Email Subject: {subject} [{response}]");
             return true;
         }
         catch (Exception ex)
@@ -73,10 +73,19 @@ public class HandleEmailSenderFn : IFunctionCallback
     private async Task<IEnumerable<MessageFileModel>> GetConversationFiles()
     {
         var convService = _services.GetRequiredService<IConversationService>();
-        var conversationId = convService.ConversationId;
-
         var fileInstruct = _services.GetRequiredService<IFileInstructService>();
-        var selecteds = await fileInstruct.SelectMessageFiles(conversationId, new SelectFileOptions { IncludeBotFile = true });
+        var convSettings = _services.GetRequiredService<ConversationSetting>();
+
+        var selecteds = await fileInstruct.SelectMessageFiles(convService.ConversationId, options: new()
+        {
+            IsIncludeBotFiles = true,
+            IsAttachFiles = true,
+            MessageLimit = convSettings?.FileSelect?.MessageLimit,
+            Provider = convSettings?.FileSelect?.Provider,
+            Model = convSettings?.FileSelect?.Model,
+            MaxOutputTokens = convSettings?.FileSelect?.MaxOutputTokens,
+            ReasoningEffortLevel = convSettings?.FileSelect?.ReasoningEffortLevel
+        });
         return selecteds;
     }
 

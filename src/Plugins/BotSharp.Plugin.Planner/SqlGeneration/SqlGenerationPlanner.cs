@@ -36,7 +36,7 @@ public class SqlGenerationPlanner : ITaskPlanner
         inst = response.Content.JsonContent<FunctionCallFromLlm>();
 
         // Fix LLM malformed response
-        ReasonerHelper.FixMalformedResponse(_services, inst);
+        await ReasonerHelper.FixMalformedResponse(_services, inst);
         return inst;
     }
 
@@ -62,12 +62,12 @@ public class SqlGenerationPlanner : ITaskPlanner
         return true;
     }
 
-    public async Task<bool> AgentExecuting(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
+    public Task<bool> AgentExecuting(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
     {
         // Set user content as Planner's question
         message.FunctionName = inst.Function;
         message.FunctionArgs = inst.Arguments == null ? "{}" : JsonSerializer.Serialize(inst.Arguments);
-        return true;
+        return Task.FromResult(true);
     }
 
     public async Task<bool> AgentExecuted(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
@@ -76,13 +76,13 @@ public class SqlGenerationPlanner : ITaskPlanner
 
         if (message.StopCompletion)
         {
-            context.Empty(reason: $"Agent queue is cleared by {nameof(SqlGenerationPlanner)}");
+            await context.Empty(reason: $"Agent queue is cleared by {nameof(SqlGenerationPlanner)}");
             return false;
         }
 
         if (dialogs.Last().Role == AgentRole.Assistant)
         {
-            context.Empty();
+            await context.Empty();
             return false;
         }
 

@@ -17,6 +17,7 @@ global using BotSharp.Abstraction.Agents.Models;
 global using BotSharp.Abstraction.Conversations;
 global using BotSharp.Abstraction.Conversations.Models;
 global using BotSharp.Abstraction.Loggers;
+global using BotSharp.Abstraction.Hooks;
 global using BotSharp.Abstraction.MLTasks;
 global using BotSharp.Abstraction.Agents;
 global using BotSharp.Abstraction.Files;
@@ -26,11 +27,18 @@ global using BotSharp.Abstraction.Conversations.Enums;
 global using BotSharp.Abstraction.Files.Utilities;
 global using BotSharp.Abstraction.Functions.Models;
 global using BotSharp.Abstraction.MLTasks.Settings;
+global using BotSharp.Abstraction.MLTasks.Utilities;
 global using BotSharp.Abstraction.Options;
 global using BotSharp.Abstraction.Realtime;
 global using BotSharp.Abstraction.Realtime.Models;
-global using BotSharp.Abstraction.Realtime.Models.Session;
+global using BotSharp.Abstraction.Realtime.Sessions;
+
 global using BotSharp.Core.Infrastructures;
 global using BotSharp.Core.Session;
-global using BotSharp.Plugin.OpenAI.Models;
+
+global using BotSharp.Plugin.OpenAI.Models.Text;
+global using BotSharp.Plugin.OpenAI.Models.Realtime;
+global using BotSharp.Plugin.OpenAI.Models.Live;
+global using BotSharp.Plugin.OpenAI.Models.Image;
+global using BotSharp.Plugin.OpenAI.Models.Web;
 global using BotSharp.Plugin.OpenAI.Settings;

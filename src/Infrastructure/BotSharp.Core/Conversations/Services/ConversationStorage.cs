@@ -8,6 +8,7 @@ public class ConversationStorage : IConversationStorage
 {
     private readonly BotSharpOptions _options;
     private readonly IServiceProvider _services;
+    private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
     public ConversationStorage(
         BotSharpOptions options,
@@ -17,12 +18,20 @@ public class ConversationStorage : IConversationStorage
         _options = options;
     }
 
-    public void Append(string conversationId, RoleDialogModel dialog)
+    public async Task Append(string conversationId, RoleDialogModel dialog)
     {
-        Append(conversationId, [dialog]);
+        await _semaphore.WaitAsync();
+        try
+        {
+            await Append(conversationId, [dialog]);
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
     }
 
-    public void Append(string conversationId, IEnumerable<RoleDialogModel> dialogs)
+    public async Task Append(string conversationId, IEnumerable<RoleDialogModel> dialogs)
     {
         if (dialogs.IsNullOrEmpty()) return;
 
@@ -31,31 +40,20 @@ public class ConversationStorage : IConversationStorage
 
         foreach ( var dialog in dialogs)
         {
-            var innerList = new List<RoleDialogModel> { dialog };
-            if (dialog.AdditionalMessageWrapper != null
-                && dialog.AdditionalMessageWrapper.SaveToDb
-                && dialog.AdditionalMessageWrapper.Messages?.Count > 0)
+            var element = BuildDialogElement(dialog);
+            if (element != null)
             {
-                innerList.AddRange(dialog.AdditionalMessageWrapper.Messages);
-            }
-
-            foreach (var item in innerList)
-            {
-                var element = BuildDialogElement(item);
-                if (element != null)
-                {
-                    dialogElements.Add(element);
-                }
+                dialogElements.Add(element);
             }
         }
 
-        db.AppendConversationDialogs(conversationId, dialogElements);
+        await db.AppendConversationDialogs(conversationId, dialogElements);
     }
 
-    public List<RoleDialogModel> GetDialogs(string conversationId)
+    public async Task<List<RoleDialogModel>> GetDialogs(string conversationId, ConversationDialogFilter? filter = null)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var dialogs = db.GetConversationDialogs(conversationId);
+        var dialogs = await db.GetConversationDialogs(conversationId, filter);
         var hooks = _services.GetServices<IConversationHook>();
 
         var results = new List<RoleDialogModel>();
@@ -77,12 +75,15 @@ public class ConversationStorage : IConversationStorage
                 CurrentAgentId = meta?.AgentId ?? string.Empty,
                 MessageId = meta?.MessageId ?? string.Empty,
                 MessageType = meta?.MessageType ?? string.Empty,
+                ExcludeFromContext = meta?.ExcludeFromContext ?? false,
                 MessageLabel = meta?.MessageLabel,
                 CreatedAt = meta?.CreatedTime ?? default,
                 SenderId = senderId,
+                ToolCallId = meta?.ToolCallId,
                 FunctionName = meta?.FunctionName,
                 FunctionArgs = meta?.FunctionArgs,
-                ToolCallId = meta?.ToolCallId,
+                Thought = meta?.Thought,
+                MetaData = meta?.MetaData,
                 RichContent = richContent,
                 SecondaryContent = secondaryContent,
                 SecondaryRichContent = secondaryRichContent,
@@ -92,13 +93,13 @@ public class ConversationStorage : IConversationStorage
 
             foreach(var hook in hooks)
             {
-                hook.OnDialogRecordLoaded(record).Wait();
+                await hook.OnDialogRecordLoaded(record);
             }
         }
 
         foreach (var hook in hooks)
         {
-            hook.OnDialogsLoaded(results).Wait();
+            await hook.OnDialogsLoaded(results);
         }
 
         return results;
@@ -116,10 +117,13 @@ public class ConversationStorage : IConversationStorage
                 AgentId = dialog.CurrentAgentId,
                 MessageId = dialog.MessageId,
                 MessageType = dialog.MessageType,
+                ExcludeFromContext = dialog.ExcludeFromContext,
                 MessageLabel = dialog.MessageLabel,
+                ToolCallId = dialog.ToolCallId,
                 FunctionName = dialog.FunctionName,
                 FunctionArgs = dialog.FunctionArgs,
-                ToolCallId = dialog.ToolCallId,
+                Thought = dialog.Thought,
+                MetaData = dialog.MetaData,
                 CreatedTime = dialog.CreatedAt
             };
 
@@ -143,9 +147,12 @@ public class ConversationStorage : IConversationStorage
                 AgentId = dialog.CurrentAgentId,
                 MessageId = dialog.MessageId,
                 MessageType = dialog.MessageType,
+                ExcludeFromContext = dialog.ExcludeFromContext,
                 MessageLabel = dialog.MessageLabel,
                 SenderId = dialog.SenderId,
                 FunctionName = dialog.FunctionName,
+                Thought = dialog.Thought,
+                MetaData = dialog.MetaData,
                 CreatedTime = dialog.CreatedAt
             };
 

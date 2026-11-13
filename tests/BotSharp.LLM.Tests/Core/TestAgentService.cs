@@ -1,7 +1,9 @@
 using BotSharp.Abstraction.Agents;
 using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Agents.Models;
+using BotSharp.Abstraction.Agents.Options;
 using BotSharp.Abstraction.Functions.Models;
+using BotSharp.Abstraction.Instructs.Enums;
 using BotSharp.Abstraction.Models;
 using BotSharp.Abstraction.Plugins.Models;
 using BotSharp.Abstraction.Repositories.Filters;
@@ -41,42 +43,32 @@ namespace BotSharp.Plugin.Google.Core
             return Task.CompletedTask;
         }
 
-        public string RenderInstruction(Agent agent)
+        public string RenderInstruction(Agent agent, IDictionary<string, object>? renderData = null)
         {
             return "Fake Instruction";
         }
 
-        public string RenderTemplate(Agent agent, string templateName)
+        public string RenderTemplate(Agent agent, string templateName, IDictionary<string, object>? renderData = null)
         {
             return $"Rendered template for {templateName}";
         }
 
-        public bool RenderFunction(Agent agent, FunctionDef def)
+        public bool RenderFunction(Agent agent, FunctionDef def, IDictionary<string, object>? renderData = null)
         {
             return true;
         }
 
-        public (string, IEnumerable<FunctionDef>) PrepareInstructionAndFunctions(Agent agent, StringComparer? comparer = null)
+        public (string, IEnumerable<FunctionDef>) PrepareInstructionAndFunctions(Agent agent, IDictionary<string, object>? renderData = null, StringComparer? comparer = null)
         {
             return (string.Empty, []);
         }
 
-        public IEnumerable<FunctionDef> FilterFunctions(string instruction, Agent agent, StringComparer? comparer = null)
-        {
-            return [];
-        }
-
-        public IEnumerable<FunctionDef> FilterFunctions(string instruction, IEnumerable<FunctionDef> functions, StringComparer? comparer = null)
-        {
-            return [];
-        }
-
-        public FunctionParametersDef? RenderFunctionProperty(Agent agent, FunctionDef def)
+        public FunctionParametersDef? RenderFunctionProperty(Agent agent, FunctionDef def, IDictionary<string, object>? renderData = null)
         {
             return def.Parameters;
         }
 
-        public bool RenderVisibility(string? visibilityExpression, Dictionary<string, object> dict)
+        public bool RenderVisibility(string? visibilityExpression, IDictionary<string, object> dict)
         {
             return true;
         }
@@ -86,7 +78,7 @@ namespace BotSharp.Plugin.Google.Core
             return Task.FromResult(new Agent());
         }
 
-        public Task<bool> DeleteAgent(string id)
+        public Task<bool> DeleteAgent(string id, AgentDeleteOptions? options = null)
         {
             return Task.FromResult(true);
         }
@@ -121,14 +113,29 @@ namespace BotSharp.Plugin.Google.Core
             return Task.FromResult(new List<UserAgent> { new UserAgent() });
         }
 
-        public PluginDef GetPlugin(string agentId)
+        public Task<PluginDef> GetPlugin(string agentId)
         {
-            return new PluginDef();
+            return Task.FromResult(new PluginDef());
         }
 
         public Task<IEnumerable<AgentUtility>> GetAgentUtilityOptions()
         {
             return Task.FromResult(Enumerable.Empty<AgentUtility>());
+        }
+
+        public IDictionary<string, object> CollectRenderData(Agent agent)
+        {
+            return new Dictionary<string, object>();
+        }
+
+        public ResponseFormatType GetTemplateResponseFormat(Agent agent, string templateName)
+        {
+            return ResponseFormatType.Text;
+        }
+
+        public Task<AgentTemplate> GetAgentTemplateDetail(string agentId, string templateName)
+        {
+            return Task.FromResult(new AgentTemplate { Name = templateName });
         }
     }
 }

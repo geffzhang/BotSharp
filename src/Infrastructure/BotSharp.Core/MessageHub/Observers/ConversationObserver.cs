@@ -30,16 +30,30 @@ public class ConversationObserver : BotSharpObserverBase<HubObserveData<RoleDial
     public override void OnNext(HubObserveData<RoleDialogModel> value)
     {
         var conv = _services.GetRequiredService<IConversationService>();
+        var storage = _services.GetRequiredService<IConversationStorage>();
+        var routingCtx = _services.GetRequiredService<IRoutingContext>();
 
         if (value.EventName == ChatEvent.OnIndicationReceived)
         {
-#if DEBUG
-            _logger.LogCritical($"Receiving {value.EventName} ({value.Data.Indication}) in {nameof(ConversationObserver)} - {conv.ConversationId}");
-#endif
-            if (_listeners.TryGetValue(value.EventName, out var func) && func != null)
+
+            _logger.LogDebug($"[{nameof(ConversationObserver)}]: Receive {value.EventName} => {value.Data.Indication} ({conv.ConversationId})");
+
+        }
+        else if (value.EventName == ChatEvent.OnIntermediateMessageReceivedFromAssistant)
+        {
+            _logger.LogDebug($"[{nameof(ConversationObserver)}]: Receive {value.EventName} => {value.Data.Content} ({conv.ConversationId})");
+
+            routingCtx.AddDialogs([value.Data]);
+            if (value.SaveDataToDb)
             {
-                func(value).ConfigureAwait(false).GetAwaiter().GetResult();
+                storage.Append(conv.ConversationId, value.Data).ConfigureAwait(false).GetAwaiter().GetResult();
             }
+        }
+
+        // Hoisted out of the branches above, which only ever reached a listener for OnIndicationReceived.
+        if (_listeners.TryGetValue(value.EventName, out var func) && func != null)
+        {
+            func(value).ConfigureAwait(false).GetAwaiter().GetResult();
         }
     }
 }

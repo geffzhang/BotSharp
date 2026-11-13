@@ -1,10 +1,9 @@
 using BotSharp.Abstraction.Hooks;
 using BotSharp.Abstraction.Routing;
-using BotSharp.Abstraction.Routing.Enums;
 using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Plugin.Twilio.Interfaces;
 using BotSharp.Plugin.Twilio.Models;
-using Twilio.Rest.Api.V2010.Account;
+using BotSharp.Plugin.Twilio.Services;
 using Task = System.Threading.Tasks.Task;
 
 namespace BotSharp.Plugin.Twilio.Hooks;
@@ -14,6 +13,8 @@ public class TwilioConversationHook : ConversationHookBase, IConversationHook
     private readonly IServiceProvider _services;
     private readonly TwilioSetting _setting;
     private readonly ILogger _logger;
+
+    public override string SelfId => string.Empty;
 
     public TwilioConversationHook(IServiceProvider services,
         TwilioSetting setting,
@@ -41,6 +42,7 @@ public class TwilioConversationHook : ConversationHookBase, IConversationHook
             CallSid = sid,
         };
 
+        // No OnAuthenticate before these hooks — identity is established only at the HTTP entry points.
         foreach (var hook in hooks)
         {
             if (await hook.ShouldReconnect(request, message))
@@ -53,12 +55,9 @@ public class TwilioConversationHook : ConversationHookBase, IConversationHook
                 }
 
                 // Save all states before reconnect
-                states.Save();
+                await states.Save();
 
-                CallResource.Update(
-                    pathSid: sid,
-                    url: new Uri(processUrl));
-
+                await _services.GetRequiredService<TwilioService>().TryRedirectCallAsync(sid, processUrl);
                 break;
             }
         }

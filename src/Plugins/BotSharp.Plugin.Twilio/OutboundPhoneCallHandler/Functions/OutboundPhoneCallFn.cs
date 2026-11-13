@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Conversations.Enums;
 using BotSharp.Abstraction.Files;
 using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Options;
@@ -8,6 +9,8 @@ using BotSharp.Core.Infrastructures;
 using BotSharp.Plugin.Twilio.Interfaces;
 using BotSharp.Plugin.Twilio.Models;
 using BotSharp.Plugin.Twilio.OutboundPhoneCallHandler.LlmContexts;
+using BotSharp.Plugin.Twilio.Services;
+using Twilio.Exceptions;
 using Twilio.Rest.Api.V2010.Account;
 using Twilio.TwiML.Messaging;
 using Twilio.Types;
@@ -18,6 +21,10 @@ namespace BotSharp.Plugin.Twilio.OutboundPhoneCallHandler.Functions;
 
 public class OutboundPhoneCallFn : IFunctionCallback
 {
+    // https://www.twilio.com/docs/api/errors/21215 - Geo Permission configuration is not permitting call
+    // https://www.twilio.com/docs/api/errors/21216 - API: Call blocked by Twilio
+    private static readonly HashSet<int> NotAllowedToCallErrorCodes = [21215, 21216];
+
     private readonly IServiceProvider _services;
     private readonly ILogger<OutboundPhoneCallFn> _logger;
     private readonly BotSharpOptions _options;
@@ -56,7 +63,6 @@ public class OutboundPhoneCallFn : IFunctionCallback
             return false;
         }
 
-        var fileStorage = _services.GetRequiredService<IFileStorageService>();
         var states = _services.GetRequiredService<IConversationStateService>();
 
         // Fork conversation
@@ -67,24 +73,24 @@ public class OutboundPhoneCallFn : IFunctionCallback
         var statusUrl = $"{_twilioSetting.CallbackHost}/twilio/voice/status?agent-id={message.CurrentAgentId}&conversation-id={newConversationId}";
         var recordingStatusUrl = $"{_twilioSetting.CallbackHost}/twilio/recording/status?agent-id={message.CurrentAgentId}&conversation-id={newConversationId}";
 
-        // Generate initial assistant audio
+        // load agent profile
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var agent = await agentService.GetAgent(message.CurrentAgentId);
+        var realtime = agent.Labels.Contains("realtime");
+
+        // Generate initial assistant audio; on ConversationRelay Twilio speaks the initial message as the welcome greeting
         string initAudioFile = null;
-        if (!string.IsNullOrEmpty(args.InitialMessage))
+        var useConversationRelay = !realtime && _twilioSetting.ConversationRelay.IsEnabledFor(message.CurrentAgentId);
+        if (!string.IsNullOrEmpty(args.InitialMessage) && !useConversationRelay)
         {
-            var completion = CompletionProvider.GetAudioSynthesizer(_services);
-            var data = await completion.GenerateAudioAsync(args.InitialMessage);
-            initAudioFile = "intial.mp3";
-            fileStorage.SaveSpeechFile(newConversationId, initAudioFile, data);
+            var twilio = _services.GetRequiredService<TwilioService>();
+            initAudioFile = await twilio.SaveSpeechAsync(newConversationId, "intial", args.InitialMessage);
 
             statusUrl += $"&init-audio-file={initAudioFile}";
         }
 
-        // load agent profile
-        var agentService = _services.GetRequiredService<IAgentService>();
-        var agent = await agentService.GetAgent(message.CurrentAgentId);
-
         // Set up process URL streaming or synchronous
-        if (agent.Labels.Contains("realtime"))
+        if (realtime)
         {
             processUrl += "/inbound";
         }
@@ -107,16 +113,27 @@ public class OutboundPhoneCallFn : IFunctionCallback
         }
 
         // Make outbound call
-        var call = await CallResource.CreateAsync(
-            url: new Uri(processUrl),
-            to: new PhoneNumber(args.PhoneNumber),
-            from: new PhoneNumber(_twilioSetting.PhoneNumber),
-            statusCallback: new Uri(statusUrl),
-            // https://www.twilio.com/docs/voice/answering-machine-detection
-            machineDetection: _twilioSetting.MachineDetection,
-            machineDetectionSilenceTimeout: _twilioSetting.MachineDetectionSilenceTimeout,
-            record: _twilioSetting.RecordingEnabled,
-            recordingStatusCallback: $"{_twilioSetting.CallbackHost}/twilio/record/status?agent-id={message.CurrentAgentId}&conversation-id={newConversationId}");
+        CallResource call;
+        try
+        {
+            call = await CallResource.CreateAsync(
+                url: new Uri(processUrl),
+                to: new PhoneNumber(args.PhoneNumber),
+                from: new PhoneNumber(_twilioSetting.PhoneNumber),
+                statusCallback: new Uri(statusUrl),
+                // https://www.twilio.com/docs/voice/answering-machine-detection
+                machineDetection: _twilioSetting.MachineDetection,
+                machineDetectionSilenceTimeout: _twilioSetting.MachineDetectionSilenceTimeout,
+                record: _twilioSetting.RecordingEnabled,
+                recordingStatusCallback: $"{_twilioSetting.CallbackHost}/twilio/record/status?agent-id={message.CurrentAgentId}&conversation-id={newConversationId}");
+        }
+        catch (ApiException ex) when (NotAllowedToCallErrorCodes.Contains(ex.Code))
+        {
+            _logger.LogWarning(ex, "Not allowed to call {PhoneNumber}", args.PhoneNumber);
+            message.Content = $"Not allowed to call {args.PhoneNumber}.";
+            message.StopCompletion = true;
+            return false;
+        }
 
         if (call.Status == CallResource.StatusEnum.Queued)
         {
@@ -162,7 +179,7 @@ public class OutboundPhoneCallFn : IFunctionCallback
         });
 
         var messageId = Guid.NewGuid().ToString();
-        convStorage.Append(newConversationId, new List<RoleDialogModel>
+        await convStorage.Append(newConversationId, new List<RoleDialogModel>
         {
             new RoleDialogModel(AgentRole.User, "Hi")
             {
@@ -190,7 +207,7 @@ public class OutboundPhoneCallFn : IFunctionCallback
         var subConvStates = new List<MessageState>
         {
             new(StateConst.ORIGIN_CONVERSATION_ID, originConversationId, isGlobal: true),
-            new("channel", "phone", isGlobal: true),
+            new(StateConst.CHANNEL, ConversationChannel.Phone, isGlobal: true),
             new("phone_from", call.From, isGlobal: true),
             new("phone_direction", call.Direction, isGlobal: true),
             new("phone_number", call.To, isGlobal: true),
@@ -203,7 +220,7 @@ public class OutboundPhoneCallFn : IFunctionCallback
         var mappedSubConvStates = MapStates(subConvStates, messageId, utcNow);
         var allStates = mappedCurConvStates.Concat(mappedSubConvStates).ToList();
 
-        db.UpdateConversationStates(newConversationId, allStates);
+        await db.UpdateConversationStates(newConversationId, allStates);
     }
 
     private IEnumerable<StateKeyValue> MapStates(IEnumerable<MessageState> states, string messageId, DateTime updateTime)

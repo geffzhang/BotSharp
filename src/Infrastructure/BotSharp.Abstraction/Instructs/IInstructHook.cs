@@ -1,3 +1,5 @@
+using BotSharp.Abstraction.Coding.Contexts;
+using BotSharp.Abstraction.Coding.Models;
 using BotSharp.Abstraction.Hooks;
 using BotSharp.Abstraction.Instructs.Models;
 
@@ -5,7 +7,10 @@ namespace BotSharp.Abstraction.Instructs;
 
 public interface IInstructHook : IHookBase
 {
-    Task BeforeCompletion(Agent agent, RoleDialogModel message);
-    Task AfterCompletion(Agent agent, InstructResult result);
-    Task OnResponseGenerated(InstructResponseModel response);
+    Task BeforeCompletion(Agent agent, RoleDialogModel message) => Task.CompletedTask;
+    Task AfterCompletion(Agent agent, InstructResult result) => Task.CompletedTask;
+    Task OnResponseGenerated(InstructResponseModel response) => Task.CompletedTask;
+
+    Task BeforeCodeExecution(Agent agent, CodeExecutionContext context) => Task.CompletedTask;
+    Task AfterCodeExecution(Agent agent, CodeExecutionContext context, CodeExecutionResponseModel response) => Task.CompletedTask;
 }

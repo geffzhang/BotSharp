@@ -1,5 +1,9 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Hooks;
-using BotSharp.Abstraction.Realtime.Models.Session;
+using BotSharp.Abstraction.Realtime.Options;
+using BotSharp.Abstraction.Realtime.Sessions;
+using BotSharp.Abstraction.Realtime.Settings;
+using BotSharp.Abstraction.Settings;
 using BotSharp.Core.Infrastructures.Streams;
 using BotSharp.Core.Session;
 using BotSharp.Plugin.GoogleAI.Models.Realtime;
@@ -18,11 +22,13 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
     private string _model = GoogleAIModels.Gemini2FlashLive001;
 
     private readonly IServiceProvider _services;
-    private readonly ILogger _logger;
+    private readonly ILogger<GoogleRealTimeProvider> _logger;
+    private readonly GoogleAiSettings _settings;
+
     private List<string> renderedInstructions = [];
 
     private LlmRealtimeSession _session;
-    private readonly GoogleAiSettings _settings;
+    private RealtimeOptions? _realtimeOptions;
 
     private const string DEFAULT_MIME_TYPE = "audio/pcm;rate=16000";
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -50,17 +56,12 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
 
     public GoogleRealTimeProvider(
         IServiceProvider services,
-        GoogleAiSettings settings,
-        ILogger<GoogleRealTimeProvider> logger)
+        ILogger<GoogleRealTimeProvider> logger,
+        GoogleAiSettings settings)
     {
-        _settings = settings;
         _services = services;
         _logger = logger;
-    }
-
-    public void SetModelName(string model)
-    {
-        _model = model;
+        _settings = settings;
     }
 
     public async Task Connect(
@@ -88,8 +89,9 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
 
         var settingsService = _services.GetRequiredService<ILlmProviderService>();
         var realtimeModelSettings = _services.GetRequiredService<RealtimeModelSettings>();
+        var settingService = _services.GetRequiredService<ISettingService>();
 
-        _model = realtimeModelSettings.Model;
+        _model ??= realtimeModelSettings.Model;
         var modelSettings = settingsService.GetSetting(Provider, _model);
 
         Reset();
@@ -420,6 +422,16 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
         }
     }
 
+    public void SetModelName(string model)
+    {
+        _model = model;
+    }
+
+    public void SetOptions(RealtimeOptions? options)
+    {
+        _realtimeOptions = options;
+    }
+
     #region Private methods
     private List<RoleDialogModel> OnFunctionCall(RealtimeHubConnection conn, RealtimeFunctionCall functionCall)
     {
@@ -477,7 +489,8 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
     }
 
 
-    private (string, GenerateContentRequest) PrepareOptions(Agent agent,
+    private (string, GenerateContentRequest) PrepareOptions(
+        Agent agent,
         List<RoleDialogModel> conversations)
     {
         var agentService = _services.GetRequiredService<IAgentService>();
@@ -492,7 +505,8 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
         var funcPrompts = new List<string>();
 
         // Prepare instruction and functions
-        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent);
+        var renderData = agentService.CollectRenderData(agent);
+        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent, renderData);
         if (!string.IsNullOrWhiteSpace(instruction))
         {
             renderedInstructions.Add(instruction);
@@ -501,9 +515,12 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
 
         foreach (var function in functions)
         {
-            if (!agentService.RenderFunction(agent, function)) continue;
+            if (!agentService.RenderFunction(agent, function, renderData))
+            {
+                continue;
+            }
 
-            var def = agentService.RenderFunctionProperty(agent, function);
+            var def = agentService.RenderFunctionProperty(agent, function, renderData);
             var props = JsonSerializer.Serialize(def?.Properties);
             var parameters = !string.IsNullOrWhiteSpace(props) && props != "{}"
                 ? new Schema()
@@ -555,33 +572,32 @@ public class GoogleRealTimeProvider : IRealTimeCompletion
                             Name = message.FunctionName ?? string.Empty,
                             Response = new JsonObject()
                             {
-                                ["result"] = message.Content ?? string.Empty
+                                ["result"] = message.LlmContent ?? string.Empty
                             }
                         }
                     }
                 ], AgentRole.Function));
 
                 convPrompts.Add(
-                    $"{AgentRole.Assistant}: Call function {message.FunctionName}({message.FunctionArgs}) => {message.Content}");
+                    $"{AgentRole.Assistant}: Call function {message.FunctionName}({message.FunctionArgs}) => {message.LlmContent}");
             }
             else if (message.Role == AgentRole.User)
             {
-                var text = !string.IsNullOrWhiteSpace(message.Payload) ? message.Payload : message.Content;
+                var text = message.LlmContent;
                 contents.Add(new Content(text, AgentRole.User));
                 convPrompts.Add($"{AgentRole.User}: {text}");
             }
             else if (message.Role == AgentRole.Assistant)
             {
-                contents.Add(new Content(message.Content, AgentRole.Model));
-                convPrompts.Add($"{AgentRole.Assistant}: {message.Content}");
+                contents.Add(new Content(message.LlmContent, AgentRole.Model));
+                convPrompts.Add($"{AgentRole.Assistant}: {message.LlmContent}");
             }
         }
 
         var state = _services.GetRequiredService<IConversationStateService>();
-        var temperature = float.Parse(state.GetState("temperature", "0.0"));
-        var maxTokens = int.TryParse(state.GetState("max_tokens"), out var tokens)
-            ? tokens
-            : agent.LlmConfig?.MaxOutputTokens ?? LlmConstant.DEFAULT_MAX_OUTPUT_TOKEN;
+        var temperature = state.GetState(LlmStateConst.TEMPERATURE, 0.0f);
+        var maxTokens = state.GetState<int?>(LlmStateConst.MAX_TOKENS)
+            ?? agent.LlmConfig?.MaxOutputTokens ?? LlmConstant.DEFAULT_MAX_OUTPUT_TOKEN;
         
         var request = new GenerateContentRequest
         {

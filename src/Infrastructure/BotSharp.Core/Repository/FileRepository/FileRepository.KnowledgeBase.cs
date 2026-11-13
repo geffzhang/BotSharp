@@ -1,3 +1,5 @@
+using BotSharp.Abstraction.Knowledges.Filters;
+using BotSharp.Abstraction.VectorStorage.Filters;
 using BotSharp.Abstraction.VectorStorage.Models;
 using System.IO;
 
@@ -6,7 +8,7 @@ namespace BotSharp.Core.Repository;
 public partial class FileRepository
 {
     #region Configs
-    public bool AddKnowledgeCollectionConfigs(List<VectorCollectionConfig> configs, bool reset = false)
+    public async Task<bool> AddKnowledgeCollectionConfigs(List<VectorCollectionConfig> configs, bool reset = false)
     {
         var vectorDir = BuildKnowledgeCollectionConfigDir();
         if (!Directory.Exists(vectorDir))
@@ -17,16 +19,16 @@ public partial class FileRepository
         var configFile = Path.Combine(vectorDir, COLLECTION_CONFIG_FILE);
         if (!File.Exists(configFile))
         {
-            File.WriteAllText(configFile, "[]");
+            await File.WriteAllTextAsync(configFile, "[]");
         }
 
         if (reset)
         {
-            File.WriteAllText(configFile, JsonSerializer.Serialize(configs ?? new(), _options));
+            await File.WriteAllTextAsync(configFile, JsonSerializer.Serialize(configs ?? new(), _options));
             return true;
         }
 
-        var str = File.ReadAllText(configFile);
+        var str = await File.ReadAllTextAsync(configFile);
         var savedConfigs = JsonSerializer.Deserialize<List<VectorCollectionConfig>>(str, _options) ?? new();
 
         // Update if collection already exists, otherwise insert
@@ -46,27 +48,33 @@ public partial class FileRepository
             }
         }
 
-        File.WriteAllText(configFile, JsonSerializer.Serialize(savedConfigs ?? new(), _options));
+        await File.WriteAllTextAsync(configFile, JsonSerializer.Serialize(savedConfigs ?? new(), _options));
         return true;
     }
 
-    public bool DeleteKnowledgeCollectionConfig(string collectionName)
+    public async Task<bool> DeleteKnowledgeCollectionConfig(string collectionName)
     {
-        if (string.IsNullOrWhiteSpace(collectionName)) return false;
+        if (string.IsNullOrWhiteSpace(collectionName))
+        {
+            return false;
+        }
 
         var vectorDir = BuildKnowledgeCollectionConfigDir();
         var configFile = Path.Combine(vectorDir, COLLECTION_CONFIG_FILE);
-        if (!File.Exists(configFile)) return false;
+        if (!File.Exists(configFile))
+        {
+            return false;
+        }
 
-        var str = File.ReadAllText(configFile);
+        var str = await File.ReadAllTextAsync(configFile);
         var savedConfigs = JsonSerializer.Deserialize<List<VectorCollectionConfig>>(str, _options) ?? new();
         savedConfigs = savedConfigs.Where(x => x.Name != collectionName).ToList();
-        File.WriteAllText(configFile, JsonSerializer.Serialize(savedConfigs ?? new(), _options));
+        await File.WriteAllTextAsync(configFile, JsonSerializer.Serialize(savedConfigs ?? new(), _options));
 
         return true;
     }
 
-    public IEnumerable<VectorCollectionConfig> GetKnowledgeCollectionConfigs(VectorCollectionConfigFilter filter)
+    public async Task<IEnumerable<VectorCollectionConfig>> GetKnowledgeCollectionConfigs(VectorCollectionConfigFilter filter)
     {
         if (filter == null)
         {
@@ -81,7 +89,7 @@ public partial class FileRepository
         }
 
         // Get data
-        var content = File.ReadAllText(configFile);
+        var content = await File.ReadAllTextAsync(configFile);
         var configs = JsonSerializer.Deserialize<List<VectorCollectionConfig>>(content, _options) ?? new();
 
         // Apply filters
@@ -95,18 +103,31 @@ public partial class FileRepository
             configs = configs.Where(x => filter.CollectionTypes.Contains(x.Type)).ToList();
         }
 
-        if (!filter.VectorStroageProviders.IsNullOrEmpty())
+        if (!filter.VectorStorageProviders.IsNullOrEmpty())
         {
-            configs = configs.Where(x => filter.VectorStroageProviders.Contains(x.VectorStore?.Provider)).ToList();
+            configs = configs.Where(x => filter.VectorStorageProviders.Contains(x.VectorStore?.Provider)).ToList();
         }
 
         return configs;
     }
-    #endregion
+
+#if !DEBUG
+    [SharpCache(10)]
+#endif
+    public async Task<VectorCollectionConfig> GetKnowledgeCollectionConfig(string collectionName, string knowledgebaseProvider)
+    {
+        var configs = await GetKnowledgeCollectionConfigs(new VectorCollectionConfigFilter
+        {
+            CollectionNames = [collectionName],
+            VectorStorageProviders = [knowledgebaseProvider]
+        });
+        return configs?.FirstOrDefault();
+    }
+#endregion
 
 
     #region Documents
-    public bool SaveKnolwedgeBaseFileMeta(KnowledgeDocMetaData metaData)
+    public async Task<bool> SaveKnolwedgeBaseFileMeta(KnowledgeFileMetaData metaData)
     {
         if (metaData == null
             || string.IsNullOrWhiteSpace(metaData.Collection)
@@ -124,20 +145,23 @@ public partial class FileRepository
 
         var metaFile = Path.Combine(docDir, KNOWLEDGE_DOC_META_FILE);
         var content = JsonSerializer.Serialize(metaData, _options);
-        File.WriteAllText(metaFile, content);
+        await File.WriteAllTextAsync(metaFile, content);
         return true;
     }
 
-    public bool DeleteKnolwedgeBaseFileMeta(string collectionName, string vectorStoreProvider, Guid? fileId = null)
+    public async Task<bool> DeleteKnolwedgeBaseFileMeta(string collectionName, string knowledgebaseProvider, Guid? fileId = null)
     {
         if (string.IsNullOrWhiteSpace(collectionName)
-            || string.IsNullOrWhiteSpace(vectorStoreProvider))
+            || string.IsNullOrWhiteSpace(knowledgebaseProvider))
         {
             return false;
         }
 
-        var dir = BuildKnowledgeCollectionFileDir(collectionName, vectorStoreProvider);
-        if (!Directory.Exists(dir)) return false;
+        var dir = BuildKnowledgeCollectionFileDir(collectionName, knowledgebaseProvider);
+        if (!Directory.Exists(dir))
+        {
+            return false;
+        }
 
         if (fileId == null)
         {
@@ -152,32 +176,38 @@ public partial class FileRepository
             }
         }
 
-        return true;
+        return await Task.FromResult(true);
     }
 
-    public async ValueTask<PagedItems<KnowledgeDocMetaData>> GetKnowledgeBaseFileMeta(string collectionName, string vectorStoreProvider, KnowledgeFileFilter filter)
+    public async Task<PagedItems<KnowledgeFileMetaData>> GetKnowledgeBaseFileMeta(string collectionName, string knowledgebaseProvider, KnowledgeFileFilter filter)
     {
         if (string.IsNullOrWhiteSpace(collectionName)
-            || string.IsNullOrWhiteSpace(vectorStoreProvider))
+            || string.IsNullOrWhiteSpace(knowledgebaseProvider))
         {
-            return new PagedItems<KnowledgeDocMetaData>();
+            return new PagedItems<KnowledgeFileMetaData>();
         }
 
-        var dir = BuildKnowledgeCollectionFileDir(collectionName, vectorStoreProvider);
+        var dir = BuildKnowledgeCollectionFileDir(collectionName, knowledgebaseProvider);
         if (!Directory.Exists(dir))
         {
-            return new PagedItems<KnowledgeDocMetaData>();
+            return new PagedItems<KnowledgeFileMetaData>();
         }
 
-        var records = new List<KnowledgeDocMetaData>();
-        foreach (var folder in Directory.GetDirectories(dir))
+        var records = new List<KnowledgeFileMetaData>();
+        foreach (var folder in Directory.EnumerateDirectories(dir))
         {
             var metaFile = Path.Combine(folder, KNOWLEDGE_DOC_META_FILE);
-            if (!File.Exists(metaFile)) continue;
+            if (!File.Exists(metaFile))
+            {
+                continue;
+            }
 
-            var content = File.ReadAllText(metaFile);
-            var metaData = JsonSerializer.Deserialize<KnowledgeDocMetaData>(content, _options);
-            if (metaData == null) continue;
+            var content = await File.ReadAllTextAsync(metaFile);
+            var metaData = JsonSerializer.Deserialize<KnowledgeFileMetaData>(content, _options);
+            if (metaData == null)
+            {
+                continue;
+            }
 
             var matched = true;
 
@@ -206,12 +236,15 @@ public partial class FileRepository
             }
             
 
-            if (!matched) continue;
+            if (!matched)
+            {
+                continue;
+            }
 
             records.Add(metaData);
         }
         
-        return new PagedItems<KnowledgeDocMetaData>
+        return new PagedItems<KnowledgeFileMetaData>
         {
             Items = records.OrderByDescending(x => x.CreateDate).Skip(filter.Offset).Take(filter.Size),
             Count = records.Count

@@ -26,7 +26,7 @@ public partial class ConversationService
         }
 
         var conv = _services.GetRequiredService<IConversationService>();
-        var dialogs = conv.GetDialogHistory();
+        var dialogs = await conv.GetDialogHistory();
 
         var statistics = _services.GetRequiredService<ITokenStatistics>();
 
@@ -36,12 +36,17 @@ public partial class ConversationService
         // Enqueue receiving agent first in case it stop completion by OnMessageReceived
         var routing = _services.GetRequiredService<IRoutingService>();
         routing.Context.SetMessageId(_conversationId, message.MessageId);
+        routing.Context.SetMessageAgentId(message.CurrentAgentId);
 
         // Save payload in order to assign the payload before hook is invoked
         if (replyMessage != null && !string.IsNullOrEmpty(replyMessage.Payload))
         {
             message.Payload = replyMessage.Payload;
         }
+
+        // Handle multi-language for input. Runs ahead of the hooks so they evaluate English content,
+        // and covers both routing paths from a single place.
+        await TranslateInboundMessage(agent, message);
 
         var hooks = _services.GetHooksOrderByPriority<IConversationHook>(message.CurrentAgentId);
         foreach (var hook in hooks)
@@ -62,7 +67,7 @@ public partial class ConversationService
             if (message.StopCompletion)
             {
                 stopCompletion = true;
-                routing.Context.Pop();
+                await routing.Context.Pop();
                 break;
             }
         }
@@ -80,18 +85,24 @@ public partial class ConversationService
 
             if (agent.Type == AgentType.Routing)
             {
+                await routing.Context.Push(agent.Id, reason: "request started", updateLazyRouting: false);
+
                 // Check the routing mode
                 var states = _services.GetRequiredService<IConversationStateService>();
-                var routingMode = states.GetState(StateConst.ROUTING_MODE, RoutingMode.Eager);
-                routing.Context.Push(agent.Id, reason: "request started", updateLazyRouting: false);
+                var routingMode = states.GetState(StateConst.ROUTING_MODE, agent.Mode ?? RoutingMode.Eager);
+                var lazyRoutingAgentId = states.GetState(StateConst.LAZY_ROUTING_AGENT_ID);
 
-                if (routingMode == RoutingMode.Lazy)
+                if (routingMode == RoutingMode.Lazy && !string.IsNullOrEmpty(lazyRoutingAgentId))
                 {
-                    message.CurrentAgentId = states.GetState(StateConst.LAZY_ROUTING_AGENT_ID, message.CurrentAgentId);
-                    routing.Context.Push(message.CurrentAgentId, reason: "lazy routing", updateLazyRouting: false);
+                    message.CurrentAgentId = lazyRoutingAgentId;
+                    agent = await agentService.LoadAgent(message.CurrentAgentId);
+                    await routing.Context.Push(message.CurrentAgentId, reason: "lazy routing", updateLazyRouting: false);
+                    response = await routing.InstructDirect(agent, message, dialogs);
                 }
-
-                response = await routing.InstructLoop(agent, message, dialogs);
+                else
+                {
+                    response = await routing.InstructLoop(agent, message, dialogs);
+                }
             }
             else
             {
@@ -153,7 +164,7 @@ public partial class ConversationService
         if (response.Instruction != null)
         {
             var conversation = _services.GetRequiredService<IConversationService>();
-            var updatedConversation = await conversation.UpdateConversationTitle(_conversationId, response.Instruction.NextActionReason);
+            await conversation.UpdateConversationTitle(_conversationId, response.Instruction.NextActionReason);
 
             // Emit conversation ending hook
             if (response.Instruction.ConversationEnd)
@@ -170,6 +181,6 @@ public partial class ConversationService
         await onResponseReceived(response);
 
         // Add to dialog history
-        _storage.Append(_conversationId, response);
+        await _storage.Append(_conversationId, response);
     }
 }

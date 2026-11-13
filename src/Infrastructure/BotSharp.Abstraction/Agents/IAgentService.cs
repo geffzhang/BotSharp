@@ -1,4 +1,8 @@
+using BotSharp.Abstraction.Agents.Options;
+using BotSharp.Abstraction.Coding.Models;
+using BotSharp.Abstraction.Coding.Options;
 using BotSharp.Abstraction.Functions.Models;
+using BotSharp.Abstraction.Instructs.Enums;
 using BotSharp.Abstraction.Plugins.Models;
 using BotSharp.Abstraction.Repositories.Filters;
 
@@ -11,6 +15,11 @@ public interface IAgentService
 {
     Task<Agent> CreateAgent(Agent agent);
     Task<string> RefreshAgents(IEnumerable<string>? agentIds = null);
+
+    /// <summary>
+    /// Agents in the file repository that <see cref="RefreshAgents"/> can migrate
+    /// </summary>
+    Task<List<IdName>> GetFileAgents() => Task.FromResult<List<IdName>>([]);
     Task<PagedItems<Agent>> GetAgents(AgentFilter filter);
     Task<List<IdName>> GetAgentOptions(List<string>? agentIds = null, bool byName = false);
     Task<IEnumerable<AgentUtility>> GetAgentUtilityOptions();
@@ -29,19 +38,18 @@ public interface IAgentService
     /// <returns></returns>
     Task InheritAgent(Agent agent);
 
-    string RenderInstruction(Agent agent);
+    string RenderInstruction(Agent agent, IDictionary<string, object>? renderData = null);
 
-    string RenderTemplate(Agent agent, string templateName);
+    string RenderTemplate(Agent agent, string templateName, IDictionary<string, object>? renderData = null);
 
-    bool RenderFunction(Agent agent, FunctionDef def);
+    bool RenderFunction(Agent agent, FunctionDef def, IDictionary<string, object>? renderData = null);
 
-    FunctionParametersDef? RenderFunctionProperty(Agent agent, FunctionDef def);
+    FunctionParametersDef? RenderFunctionProperty(Agent agent, FunctionDef def, IDictionary<string, object>? renderData = null);
 
-    (string, IEnumerable<FunctionDef>) PrepareInstructionAndFunctions(Agent agent, StringComparer? comparer = null);
-    IEnumerable<FunctionDef> FilterFunctions(string instruction, Agent agent, StringComparer? comparer = null);
-    IEnumerable<FunctionDef> FilterFunctions(string instruction, IEnumerable<FunctionDef> functions, StringComparer? comparer = null);
+    (string, IEnumerable<FunctionDef>) PrepareInstructionAndFunctions(Agent agent, IDictionary<string, object>? renderData = null, StringComparer? comparer = null);
 
-    bool RenderVisibility(string? visibilityExpression, Dictionary<string, object> dict);
+    bool RenderVisibility(string? visibilityExpression, IDictionary<string, object> dict);
+    IDictionary<string, object> CollectRenderData(Agent agent);
 
 
     /// <summary>
@@ -50,8 +58,9 @@ public interface IAgentService
     /// <param name="id"></param>
     /// <returns>Original agent information</returns>
     Task<Agent> GetAgent(string id);
-    
-    Task<bool> DeleteAgent(string id);
+    Task<AgentTemplate?> GetAgentTemplateDetail(string agentId, string templateName);
+
+    Task<bool> DeleteAgent(string id, AgentDeleteOptions? options = null);
     Task UpdateAgent(Agent agent, AgentField updateField);
 
     /// <summary>
@@ -60,11 +69,26 @@ public interface IAgentService
     /// <param name="agent"></param>
     /// <returns></returns>
     Task<string> PatchAgentTemplate(Agent agent);
-    Task<string> UpdateAgentFromFile(string id);
     string GetDataDir();
     string GetAgentDataDir(string agentId);
 
     Task<List<UserAgent>> GetUserAgents(string userId);
 
-    PluginDef GetPlugin(string agentId);
+    Task<PluginDef> GetPlugin(string agentId);
+
+    Task<List<AgentCodeScript>> GetAgentCodeScripts(string agentId, AgentCodeScriptFilter? filter = null)
+        => Task.FromResult(new List<AgentCodeScript>());
+
+    Task<AgentCodeScript?> GetAgentCodeScript(string agentId, string scriptName, string scriptType = AgentCodeScriptType.Src)
+        => Task.FromResult((AgentCodeScript?)null);
+
+    Task<bool> UpdateAgentCodeScripts(string agentId, List<AgentCodeScript> codeScripts, AgentCodeScriptUpdateOptions? options = null)
+        => Task.FromResult(false);
+
+    Task<bool> DeleteAgentCodeScripts(string agentId, List<AgentCodeScript>? codeScripts = null)
+        => Task.FromResult(false);
+
+    Task<CodeGenerationResult> GenerateCodeScript(string agentId, string text, CodeGenHandleOptions? options = null)
+        => Task.FromResult(new CodeGenerationResult());
+    ResponseFormatType GetTemplateResponseFormat(Agent agent, string templateName);
 }

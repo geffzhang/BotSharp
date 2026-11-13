@@ -26,7 +26,6 @@ public class LlmRealtimeSession : IDisposable
     public async Task ConnectAsync(Uri uri, Dictionary<string, string>? headers = null, CancellationToken cancellationToken = default)
     {
         _disposed = false;
-        _webSocket?.Dispose();
         _webSocket = new ClientWebSocket();
 
         if (!headers.IsNullOrEmpty())
@@ -112,7 +111,7 @@ public class LlmRealtimeSession : IDisposable
 
         if (_webSocket.State == WebSocketState.Open)
         {
-            await _webSocket.CloseAsync(WebSocketCloseStatus.Empty, null, CancellationToken.None);
+            await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, $"Normal Closure from {nameof(LlmRealtimeSession)}-{_sessionOptions?.Provider}", CancellationToken.None);
         }
     }
 

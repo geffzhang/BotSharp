@@ -1,13 +1,14 @@
 using BotSharp.Abstraction.Loggers.Models;
-using BotSharp.Abstraction.Users.Models;
-using System;
 using System.IO;
 
 namespace BotSharp.Core.Repository;
 
 public partial class FileRepository
 {
-    public void CreateNewConversation(Conversation conversation)
+    private static readonly SemaphoreSlim _dialogLock = new SemaphoreSlim(1, 1);
+    private static readonly SemaphoreSlim _stateLock = new SemaphoreSlim(1, 1);
+
+    public async Task CreateNewConversation(Conversation conversation)
     {
         var utcNow = DateTime.UtcNow;
         conversation.CreatedTime = utcNow;
@@ -23,65 +24,89 @@ public partial class FileRepository
         var convFile = Path.Combine(dir, CONVERSATION_FILE);
         if (!File.Exists(convFile))
         {
-            File.WriteAllText(convFile, JsonSerializer.Serialize(conversation, _options));
+            await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(conversation, _options));
         }
 
         var dialogFile = Path.Combine(dir, DIALOG_FILE);
         if (!File.Exists(dialogFile))
         {
-            File.WriteAllText(dialogFile, "[]");
+            await File.WriteAllTextAsync(dialogFile, "[]");
         }
 
         var stateFile = Path.Combine(dir, STATE_FILE);
         if (!File.Exists(stateFile))
         {
-            File.WriteAllText(stateFile, "[]");
+            await File.WriteAllTextAsync(stateFile, "[]");
         }
 
         var latestStateFile = Path.Combine(dir, CONV_LATEST_STATE_FILE);
         if (!File.Exists(latestStateFile))
         {
-            File.WriteAllText(latestStateFile, "{}");
+            await File.WriteAllTextAsync(latestStateFile, "{}");
         }
 
         var breakpointFile = Path.Combine(dir, BREAKPOINT_FILE);
         if (!File.Exists(breakpointFile))
         {
-            File.WriteAllText(breakpointFile, "[]");
+            await File.WriteAllTextAsync(breakpointFile, "[]");
         }
     }
 
-    public bool DeleteConversations(IEnumerable<string> conversationIds)
+    public Task<bool> DeleteConversations(IEnumerable<string> conversationIds)
     {
-        if (conversationIds.IsNullOrEmpty()) return false;
+        if (conversationIds.IsNullOrEmpty())
+        {
+            return Task.FromResult(false);
+        }
 
         foreach (var conversationId in conversationIds)
         {
             var convDir = FindConversationDirectory(conversationId);
-            if (string.IsNullOrEmpty(convDir)) continue;
+            if (string.IsNullOrEmpty(convDir))
+            {
+                continue;
+            }
 
             Directory.Delete(convDir, true);
         }
 
-        return true;
+        return Task.FromResult(true);
     }
 
     [SideCar]
-    public List<DialogElement> GetConversationDialogs(string conversationId)
+    public async Task<List<DialogElement>> GetConversationDialogs(string conversationId, ConversationDialogFilter? filter = null)
     {
         var dialogs = new List<DialogElement>();
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
         {
             var dialogDir = Path.Combine(convDir, DIALOG_FILE);
-            var texts = File.ReadAllText(dialogDir);
+            await _dialogLock.WaitAsync();
             try
             {
-                dialogs = JsonSerializer.Deserialize<List<DialogElement>>(texts, _options) ?? new List<DialogElement>();
+                if (!File.Exists(dialogDir))
+                {
+                    return dialogs;
+                }
+
+                var texts = await File.ReadAllTextAsync(dialogDir);
+                try
+                {
+                    dialogs = JsonSerializer.Deserialize<List<DialogElement>>(texts, _options) ?? [];
+                }
+                catch
+                {
+                    dialogs = [];
+                }
+
+                if (filter?.Order == "desc")
+                {
+                    dialogs = dialogs.OrderByDescending(x => x.MetaData?.CreatedTime).ToList();
+                }
             }
-            catch
+            finally
             {
-                dialogs = new List<DialogElement>();
+                _dialogLock.Release();
             }
         }
 
@@ -89,87 +114,104 @@ public partial class FileRepository
     }
 
     [SideCar]
-    public void AppendConversationDialogs(string conversationId, List<DialogElement> dialogs)
+    public async Task AppendConversationDialogs(string conversationId, List<DialogElement> dialogs)
     {
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
         {
-            var dialogFile = Path.Combine(convDir, DIALOG_FILE);
-            if (File.Exists(dialogFile))
+            await _dialogLock.WaitAsync();
+            try
             {
-                var prevDialogs = File.ReadAllText(dialogFile);
-                var elements = JsonSerializer.Deserialize<List<DialogElement>>(prevDialogs, _options);
-                if (elements != null)
+                var dialogFile = Path.Combine(convDir, DIALOG_FILE);
+                if (File.Exists(dialogFile))
                 {
-                    elements.AddRange(dialogs);
-                }
-                else
-                {
-                    elements = elements ?? new List<DialogElement>();
+                    var prevDialogs = await File.ReadAllTextAsync(dialogFile);
+                    var elements = JsonSerializer.Deserialize<List<DialogElement>>(prevDialogs, _options);
+                    if (elements != null)
+                    {
+                        elements.AddRange(dialogs);
+                    }
+                    else
+                    {
+                        elements = elements ?? new List<DialogElement>();
+                    }
+
+                    await File.WriteAllTextAsync(dialogFile, JsonSerializer.Serialize(elements, _options));
                 }
 
-                File.WriteAllText(dialogFile, JsonSerializer.Serialize(elements, _options));
+                var convFile = Path.Combine(convDir, CONVERSATION_FILE);
+                if (File.Exists(convFile))
+                {
+                    var json = await File.ReadAllTextAsync(convFile);
+                    var conv = JsonSerializer.Deserialize<Conversation>(json, _options);
+                    if (conv != null)
+                    {
+                        conv.DialogCount += dialogs.Count();
+                        conv.UpdatedTime = DateTime.UtcNow;
+                        await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(conv, _options));
+                    }
+                }
             }
-
-            var convFile = Path.Combine(convDir, CONVERSATION_FILE);
-            if (File.Exists(convFile))
+            finally
             {
-                var json = File.ReadAllText(convFile);
-                var conv = JsonSerializer.Deserialize<Conversation>(json, _options);
-                if (conv != null)
-                {
-                    conv.DialogCount += dialogs.Count();
-                    conv.UpdatedTime = DateTime.UtcNow;
-                    File.WriteAllText(convFile, JsonSerializer.Serialize(conv, _options));
-                }
+                _dialogLock.Release();
             }
         }
     }
 
-    public void UpdateConversationTitle(string conversationId, string title)
+    public async Task UpdateConversationTitle(string conversationId, string title)
     {
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
         {
             var convFile = Path.Combine(convDir, CONVERSATION_FILE);
-            var content = File.ReadAllText(convFile);
+            var content = await File.ReadAllTextAsync(convFile);
             var record = JsonSerializer.Deserialize<Conversation>(content, _options);
             if (record != null)
             {
                 record.Title = title;
                 record.UpdatedTime = DateTime.UtcNow;
-                File.WriteAllText(convFile, JsonSerializer.Serialize(record, _options));
+                await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(record, _options));
             }
         }
     }
-    public void UpdateConversationTitleAlias(string conversationId, string titleAlias)
+    public async Task UpdateConversationTitleAlias(string conversationId, string titleAlias)
     {
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
         {
             var convFile = Path.Combine(convDir, CONVERSATION_FILE);
-            var content = File.ReadAllText(convFile);
+            var content = await File.ReadAllTextAsync(convFile);
             var record = JsonSerializer.Deserialize<Conversation>(content, _options);
             if (record != null)
             {
                 record.TitleAlias = titleAlias;
                 record.UpdatedTime = DateTime.UtcNow;
-                File.WriteAllText(convFile, JsonSerializer.Serialize(record, _options));
+                await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(record, _options));
             }
         }
     }
 
-    public bool UpdateConversationTags(string conversationId, List<string> toAddTags, List<string> toDeleteTags)
+    public async Task<bool> UpdateConversationTags(string conversationId, List<string> toAddTags, List<string> toDeleteTags)
     {
-        if (string.IsNullOrEmpty(conversationId)) return false;
+        if (string.IsNullOrEmpty(conversationId))
+        {
+            return false;
+        }
 
         var convDir = FindConversationDirectory(conversationId);
-        if (string.IsNullOrEmpty(convDir)) return false;
+        if (string.IsNullOrEmpty(convDir))
+        {
+            return false;
+        }
 
         var convFile = Path.Combine(convDir, CONVERSATION_FILE);
-        if (!File.Exists(convFile)) return false;
+        if (!File.Exists(convFile))
+        {
+            return false;
+        }
 
-        var json = File.ReadAllText(convFile);
+        var json = await File.ReadAllTextAsync(convFile);
         var conv = JsonSerializer.Deserialize<Conversation>(json, _options);
 
         var tags = conv.Tags ?? [];
@@ -177,41 +219,56 @@ public partial class FileRepository
         conv.Tags = tags.Where(x => !toDeleteTags.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
 
         conv.UpdatedTime = DateTime.UtcNow;
-        File.WriteAllText(convFile, JsonSerializer.Serialize(conv, _options));
+        await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(conv, _options));
         return true;
     }
 
-    public bool AppendConversationTags(string conversationId, List<string> tags)
+    public async Task<bool> AppendConversationTags(string conversationId, List<string> tags)
     {
-        if (string.IsNullOrEmpty(conversationId) || tags.IsNullOrEmpty()) return false;
+        if (string.IsNullOrEmpty(conversationId) || tags.IsNullOrEmpty())
+        {
+            return false;
+        }
 
         var convDir = FindConversationDirectory(conversationId);
-        if (string.IsNullOrEmpty(convDir)) return false;
+        if (string.IsNullOrEmpty(convDir))
+        {
+            return false;
+        }
 
         var convFile = Path.Combine(convDir, CONVERSATION_FILE);
-        if (!File.Exists(convFile)) return false;
+        if (!File.Exists(convFile))
+        {
+            return false;
+        }
 
-        var json = File.ReadAllText(convFile);
+        var json = await File.ReadAllTextAsync(convFile);
         var conv = JsonSerializer.Deserialize<Conversation>(json, _options);
 
         var curTags = conv.Tags ?? new();
         var newTags = curTags.Concat(tags).Distinct(StringComparer.InvariantCultureIgnoreCase).ToList();
         conv.Tags = newTags;
         conv.UpdatedTime = DateTime.UtcNow;
-        File.WriteAllText(convFile, JsonSerializer.Serialize(conv, _options));
+        await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(conv, _options));
         return true;
     }
 
-    public bool UpdateConversationMessage(string conversationId, UpdateMessageRequest request)
+    public async Task<bool> UpdateConversationMessage(string conversationId, UpdateMessageRequest request)
     {
-        if (string.IsNullOrEmpty(conversationId)) return false;
+        if (string.IsNullOrEmpty(conversationId))
+        {
+            return false;
+        }
 
-        var dialogs = GetConversationDialogs(conversationId);
+        var dialogs = await GetConversationDialogs(conversationId);
         var candidates = dialogs.Where(x => x.MetaData.MessageId == request.Message.MetaData.MessageId
                                     && x.MetaData.Role == request.Message.MetaData.Role).ToList();
 
-        var found = candidates.Where((_, idx) => idx == request.InnderIndex).FirstOrDefault();
-        if (found == null) return false;
+        var found = candidates.Where((_, idx) => idx == request.InnerIndex).FirstOrDefault();
+        if (found == null)
+        {
+            return false;
+        }
 
         found.Content = request.Message.Content;
         found.RichContent = request.Message.RichContent;
@@ -227,7 +284,10 @@ public partial class FileRepository
         }
 
         var convDir = FindConversationDirectory(conversationId);
-        if (string.IsNullOrEmpty(convDir)) return false;
+        if (string.IsNullOrEmpty(convDir))
+        {
+            return false;
+        }
 
         var dialogFile = Path.Combine(convDir, DIALOG_FILE);
         File.WriteAllText(dialogFile, JsonSerializer.Serialize(dialogs, _options));
@@ -235,7 +295,7 @@ public partial class FileRepository
     }
 
     [SideCar]
-    public void UpdateConversationBreakpoint(string conversationId, ConversationBreakpoint breakpoint)
+    public async Task UpdateConversationBreakpoint(string conversationId, ConversationBreakpoint breakpoint)
     {
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
@@ -243,7 +303,7 @@ public partial class FileRepository
             var breakpointFile = Path.Combine(convDir, BREAKPOINT_FILE);
             if (!File.Exists(breakpointFile))
             {
-                File.WriteAllText(breakpointFile, "[]");
+                await File.WriteAllTextAsync(breakpointFile, "[]");
             }
 
             var content = File.ReadAllText(breakpointFile);
@@ -268,12 +328,12 @@ public partial class FileRepository
                 records = newBreakpoint;
             }
 
-            File.WriteAllText(breakpointFile, JsonSerializer.Serialize(records, _options));
+            await File.WriteAllTextAsync(breakpointFile, JsonSerializer.Serialize(records, _options));
         }
     }
 
     [SideCar]
-    public ConversationBreakpoint? GetConversationBreakpoint(string conversationId)
+    public async Task<ConversationBreakpoint?> GetConversationBreakpoint(string conversationId)
     {
         var convDir = FindConversationDirectory(conversationId);
         if (string.IsNullOrEmpty(convDir))
@@ -284,53 +344,67 @@ public partial class FileRepository
         var breakpointFile = Path.Combine(convDir, BREAKPOINT_FILE);
         if (!File.Exists(breakpointFile))
         {
-            File.WriteAllText(breakpointFile, "[]");
+            await File.WriteAllTextAsync(breakpointFile, "[]");
         }
 
-        var content = File.ReadAllText(breakpointFile);
+        var content = await File.ReadAllTextAsync(breakpointFile);
         var records = JsonSerializer.Deserialize<List<ConversationBreakpoint>>(content, _options);
 
         return records?.LastOrDefault();
     }
 
-    public ConversationState GetConversationStates(string conversationId)
+    public async Task<ConversationState> GetConversationStates(string conversationId)
     {
         var states = new List<StateKeyValue>();
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
         {
             var stateFile = Path.Combine(convDir, STATE_FILE);
-            states = CollectConversationStates(stateFile);
+            states = await CollectConversationStates(stateFile);
         }
 
         return new ConversationState(states);
     }
 
     [SideCar]
-    public void UpdateConversationStates(string conversationId, List<StateKeyValue> states)
+    public async Task UpdateConversationStates(string conversationId, List<StateKeyValue> states)
     {
-        if (states.IsNullOrEmpty()) return;
-
-        var convDir = FindConversationDirectory(conversationId);
-        if (string.IsNullOrEmpty(convDir)) return;
-
-        var stateFile = Path.Combine(convDir, STATE_FILE);
-        if (File.Exists(stateFile))
+        if (states.IsNullOrEmpty())
         {
-            var stateStr = JsonSerializer.Serialize(states, _options);
-            File.WriteAllText(stateFile, stateStr);
+            return;
         }
 
-        var latestStateFile = Path.Combine(convDir, CONV_LATEST_STATE_FILE);
-        if (File.Exists(latestStateFile))
+        var convDir = FindConversationDirectory(conversationId);
+        if (string.IsNullOrEmpty(convDir))
         {
-            var latestStates = BuildLatestStates(states);
-            var stateStr = JsonSerializer.Serialize(latestStates, _options);
-            File.WriteAllText(latestStateFile, stateStr);
+            return;
+        }
+
+        await _stateLock.WaitAsync();
+        try
+        {
+            var stateFile = Path.Combine(convDir, STATE_FILE);
+            if (File.Exists(stateFile))
+            {
+                var stateStr = JsonSerializer.Serialize(states, _options);
+                await File.WriteAllTextAsync(stateFile, stateStr);
+            }
+
+            var latestStateFile = Path.Combine(convDir, CONV_LATEST_STATE_FILE);
+            if (File.Exists(latestStateFile))
+            {
+                var latestStates = BuildLatestStates(states);
+                var stateStr = JsonSerializer.Serialize(latestStates, _options);
+                await File.WriteAllTextAsync(latestStateFile, stateStr);
+            }
+        }
+        finally
+        {
+            _stateLock.Release();
         }
     }
 
-    public void UpdateConversationStatus(string conversationId, string status)
+    public async Task UpdateConversationStatus(string conversationId, string status)
     {
         var convDir = FindConversationDirectory(conversationId);
         if (!string.IsNullOrEmpty(convDir))
@@ -338,28 +412,31 @@ public partial class FileRepository
             var convFile = Path.Combine(convDir, CONVERSATION_FILE);
             if (File.Exists(convFile))
             {
-                var json = File.ReadAllText(convFile);
+                var json = await File.ReadAllTextAsync(convFile);
                 var conv = JsonSerializer.Deserialize<Conversation>(json, _options);
                 conv.Status = status;
                 conv.UpdatedTime = DateTime.UtcNow;
-                File.WriteAllText(convFile, JsonSerializer.Serialize(conv, _options));
+                await File.WriteAllTextAsync(convFile, JsonSerializer.Serialize(conv, _options));
             }
         }
     }
 
-    public Conversation GetConversation(string conversationId, bool isLoadStates = false)
+    public async Task<Conversation> GetConversation(string conversationId, bool isLoadStates = false)
     {
         var convDir = FindConversationDirectory(conversationId);
-        if (string.IsNullOrEmpty(convDir)) return null;
+        if (string.IsNullOrEmpty(convDir))
+        {
+            return null;
+        }
 
         var convFile = Path.Combine(convDir, CONVERSATION_FILE);
-        var content = File.ReadAllText(convFile);
+        var content = await File.ReadAllTextAsync(convFile);
         var record = JsonSerializer.Deserialize<Conversation>(content, _options);
 
         var dialogFile = Path.Combine(convDir, DIALOG_FILE);
         if (record != null)
         {
-            record.Dialogs = CollectDialogElements(dialogFile);
+            record.Dialogs = await CollectDialogElements(dialogFile);
         }
 
         if (isLoadStates)
@@ -367,7 +444,7 @@ public partial class FileRepository
             var latestStateFile = Path.Combine(convDir, CONV_LATEST_STATE_FILE);
             if (record != null && File.Exists(latestStateFile))
             {
-                var stateJson = File.ReadAllText(latestStateFile);
+                var stateJson = await File.ReadAllTextAsync(latestStateFile);
                 var states = JsonSerializer.Deserialize<Dictionary<string, JsonDocument>>(stateJson, _options) ?? [];
                 record.States = states.ToDictionary(x => x.Key, x =>
                 {
@@ -379,7 +456,7 @@ public partial class FileRepository
         return record;
     }
 
-    public async ValueTask<PagedItems<Conversation>> GetConversations(ConversationFilter filter)
+    public async Task<PagedItems<Conversation>> GetConversations(ConversationFilter filter)
     {
         if (filter == null)
         {
@@ -401,15 +478,20 @@ public partial class FileRepository
             filter.AgentIds.Add(filter.AgentId);
         }
 
-        var totalDirs = Directory.GetDirectories(dir);
-        foreach (var d in totalDirs)
+        foreach (var d in Directory.EnumerateDirectories(dir))
         {
             var convFile = Path.Combine(d, CONVERSATION_FILE);
-            if (!File.Exists(convFile)) continue;
+            if (!File.Exists(convFile))
+            {
+                continue;
+            }
 
-            var json = File.ReadAllText(convFile);
+            var json = await File.ReadAllTextAsync(convFile);
             var record = JsonSerializer.Deserialize<Conversation>(json, _options);
-            if (record == null) continue;
+            if (record == null)
+            {
+                continue;
+            }
 
             var matched = true;
             if (filter?.Id != null)
@@ -436,7 +518,7 @@ public partial class FileRepository
             {
                 matched = matched && record.Channel == filter.Channel;
             }
-            if(filter?.ChannelId != null)
+            if (filter?.ChannelId != null)
             {
                 matched = matched && record.ChannelId == filter.ChannelId;
             }
@@ -475,7 +557,10 @@ public partial class FileRepository
                 {
                     foreach (var pair in filter.States)
                     {
-                        if (pair == null || string.IsNullOrWhiteSpace(pair.Key)) continue;
+                        if (pair == null || string.IsNullOrWhiteSpace(pair.Key))
+                        {
+                            continue;
+                        }
 
                         var components = pair.Key.Split(".").ToList();
                         var primaryKey = components[0];
@@ -518,12 +603,18 @@ public partial class FileRepository
                             matched = false;
                         }
 
-                        if (!matched) break;
+                        if (!matched)
+                        {
+                            break;
+                        }
                     }
                 }
             }
 
-            if (!matched) continue;
+            if (!matched)
+            {
+                continue;
+            }
 
             if (filter.IsLoadLatestStates)
             {
@@ -550,19 +641,25 @@ public partial class FileRepository
         };
     }
 
-    public List<Conversation> GetLastConversations()
+    public async Task<List<Conversation>> GetLastConversations()
     {
         var records = new List<Conversation>();
         var dir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
 
-        foreach (var d in Directory.GetDirectories(dir))
+        foreach (var d in Directory.EnumerateDirectories(dir))
         {
             var path = Path.Combine(d, CONVERSATION_FILE);
-            if (!File.Exists(path)) continue;
+            if (!File.Exists(path))
+            {
+                continue;
+            }
 
-            var json = File.ReadAllText(path);
+            var json = await File.ReadAllTextAsync(path);
             var record = JsonSerializer.Deserialize<Conversation>(json, _options);
-            if (record == null) continue;
+            if (record == null)
+            {
+                continue;
+            }
 
             records.Add(record);
         }
@@ -571,7 +668,7 @@ public partial class FileRepository
                       .ToList();
     }
 
-    public List<string> GetIdleConversations(int batchSize, int messageLimit, int bufferHours, IEnumerable<string> excludeAgentIds)
+    public async Task<List<string>> GetIdleConversations(int batchSize, int messageLimit, int bufferHours, IEnumerable<string> excludeAgentIds)
     {
         var ids = new List<string>();
         var batchLimit = 100;
@@ -588,7 +685,7 @@ public partial class FileRepository
             batchSize = batchLimit;
         }
 
-        foreach (var d in Directory.GetDirectories(dir))
+        foreach (var d in Directory.EnumerateDirectories(dir))
         {
             var convFile = Path.Combine(d, CONVERSATION_FILE);
             if (!File.Exists(convFile))
@@ -597,7 +694,7 @@ public partial class FileRepository
                 continue;
             }
 
-            var json = File.ReadAllText(convFile);
+            var json = await File.ReadAllTextAsync(convFile);
             var conv = JsonSerializer.Deserialize<Conversation>(json, _options);
 
             if (conv == null)
@@ -625,7 +722,7 @@ public partial class FileRepository
     }
 
 
-    public List<string> TruncateConversation(string conversationId, string messageId, bool cleanLog = false)
+    public async Task<List<string>> TruncateConversation(string conversationId, string messageId, bool cleanLog = false)
     {
         var deletedMessageIds = new List<string>();
         if (string.IsNullOrEmpty(conversationId) || string.IsNullOrEmpty(messageId))
@@ -634,7 +731,7 @@ public partial class FileRepository
         }
 
         var dialogs = new List<DialogElement>();
-        
+
         var convDir = FindConversationDirectory(conversationId);
         if (string.IsNullOrEmpty(convDir))
         {
@@ -642,7 +739,7 @@ public partial class FileRepository
         }
 
         var dialogDir = Path.Combine(convDir, DIALOG_FILE);
-        dialogs = CollectDialogElements(dialogDir);
+        dialogs = await CollectDialogElements(dialogDir);
         if (dialogs.IsNullOrEmpty())
         {
             return deletedMessageIds;
@@ -664,7 +761,7 @@ public partial class FileRepository
         var refTime = dialogs.ElementAt(foundIdx).MetaData.CreatedTime;
         var stateDir = Path.Combine(convDir, STATE_FILE);
         var latestStateDir = Path.Combine(convDir, CONV_LATEST_STATE_FILE);
-        var states = CollectConversationStates(stateDir);
+        var states = await CollectConversationStates(stateDir);
         isSaved = HandleTruncatedStates(stateDir, latestStateDir, states, messageId, refTime);
 
         // Handle truncated breakpoints
@@ -684,15 +781,18 @@ public partial class FileRepository
 #if !DEBUG
     [SharpCache(10)]
 #endif
-    public List<string> GetConversationStateSearchKeys(ConversationStateKeysFilter filter)
+    public async Task<List<string>> GetConversationStateSearchKeys(ConversationStateKeysFilter filter)
     {
         var dir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
-        if (!Directory.Exists(dir)) return [];
+        if (!Directory.Exists(dir))
+        {
+            return [];
+        }
 
         var count = 0;
         var keys = new List<string>();
 
-        foreach (var d in Directory.GetDirectories(dir))
+        foreach (var d in Directory.EnumerateDirectories(dir))
         {
             var convFile = Path.Combine(d, CONVERSATION_FILE);
             var latestStateFile = Path.Combine(d, CONV_LATEST_STATE_FILE);
@@ -701,8 +801,8 @@ public partial class FileRepository
                 continue;
             }
 
-            var convJson = File.ReadAllText(convFile);
-            var stateJson = File.ReadAllText(latestStateFile);
+            var convJson = await File.ReadAllTextAsync(convFile);
+            var stateJson = await File.ReadAllTextAsync(latestStateFile);
             var conv = JsonSerializer.Deserialize<Conversation>(convJson, _options);
             var states = JsonSerializer.Deserialize<Dictionary<string, JsonDocument>>(stateJson, _options);
             if (conv == null
@@ -730,21 +830,28 @@ public partial class FileRepository
 
 
 
-    public List<string> GetConversationsToMigrate(int batchSize = 100)
+    public Task<List<string>> GetConversationsToMigrate(int batchSize = 100)
     {
-        var baseDir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
-        if (!Directory.Exists(baseDir)) return [];
-
         var convIds = new List<string>();
-        var dirs = Directory.GetDirectories(baseDir);
+        var baseDir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
+        if (!Directory.Exists(baseDir))
+        {
+            return Task.FromResult(convIds);
+        }
 
-        foreach (var dir in dirs)
+        foreach (var dir in Directory.EnumerateDirectories(baseDir))
         {
             var latestStateFile = Path.Combine(dir, CONV_LATEST_STATE_FILE);
-            if (File.Exists(latestStateFile)) continue;
+            if (File.Exists(latestStateFile))
+            {
+                continue;
+            }
 
             var convId = dir.Split(Path.DirectorySeparatorChar).Last();
-            if (string.IsNullOrEmpty(convId)) continue;
+            if (string.IsNullOrEmpty(convId))
+            {
+                continue;
+            }
 
             convIds.Add(convId);
             if (convIds.Count >= batchSize)
@@ -753,13 +860,16 @@ public partial class FileRepository
             }
         }
 
-        return convIds;
+        return Task.FromResult(convIds);
     }
 
 
-    public bool MigrateConvsersationLatestStates(string conversationId)
+    public async Task<bool> MigrateConvsersationLatestStates(string conversationId)
     {
-        if (string.IsNullOrEmpty(conversationId)) return false;
+        if (string.IsNullOrEmpty(conversationId))
+        {
+            return false;
+        }
 
         var convDir = FindConversationDirectory(conversationId);
         if (string.IsNullOrEmpty(convDir))
@@ -768,65 +878,237 @@ public partial class FileRepository
         }
 
         var stateFile = Path.Combine(convDir, STATE_FILE);
-        var states = CollectConversationStates(stateFile);
+        var states = await CollectConversationStates(stateFile);
         var latestStates = BuildLatestStates(states);
 
         var latestStateFile = Path.Combine(convDir, CONV_LATEST_STATE_FILE);
         var stateStr = JsonSerializer.Serialize(latestStates, _options);
-        File.WriteAllText(latestStateFile, stateStr);
-
+        await File.WriteAllTextAsync(latestStateFile, stateStr);
         return true;
     }
+
+
+    #region Files
+    public async Task<List<ConversationFile>> GetConversationFiles(ConversationFileFilter filter)
+    {
+        if (filter == null || filter.ConversationIds.IsNullOrEmpty())
+        {
+            return [];
+        }
+
+        var files = new List<ConversationFile>();
+        var baseDir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
+
+        if (!Directory.Exists(baseDir))
+        {
+            return files;
+        }
+
+        foreach (var conversationId in filter.ConversationIds)
+        {
+            if (string.IsNullOrEmpty(conversationId))
+            {
+                continue;
+            }
+
+            var convDir = Path.Combine(baseDir, conversationId);
+            if (!Directory.Exists(convDir))
+            {
+                continue;
+            }
+
+            var filesFile = Path.Combine(convDir, CONV_FILES_FILE);
+            if (!File.Exists(filesFile))
+            {
+                continue;
+            }
+
+            try
+            {
+                var json = await File.ReadAllTextAsync(filesFile);
+                var conversationFile = JsonSerializer.Deserialize<ConversationFile>(json, _options);
+                if (conversationFile != null)
+                {
+                    files.Add(conversationFile);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"Error when reading conversation files for conversation {conversationId}.");
+            }
+        }
+
+        return files;
+    }
+
+    public async Task<bool> SaveConversationFiles(List<ConversationFile> files)
+    {
+        if (files.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        try
+        {
+            var baseDir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
+
+            foreach (var file in files)
+            {
+                if (string.IsNullOrEmpty(file.ConversationId))
+                {
+                    continue;
+                }
+
+                var convDir = Path.Combine(baseDir, file.ConversationId);
+                if (!Directory.Exists(convDir))
+                {
+                    Directory.CreateDirectory(convDir);
+                }
+
+                var convFile = Path.Combine(convDir, CONV_FILES_FILE);
+                var json = JsonSerializer.Serialize(file, _options);
+                await File.WriteAllTextAsync(convFile, json);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error when saving conversation files.");
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteConversationFiles(List<string> conversationIds)
+    {
+        if (conversationIds.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        try
+        {
+            var baseDir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir);
+
+            foreach (var conversationId in conversationIds)
+            {
+                if (string.IsNullOrEmpty(conversationId))
+                {
+                    continue;
+                }
+
+                var convDir = Path.Combine(baseDir, conversationId);
+                if (!Directory.Exists(convDir))
+                {
+                    continue;
+                }
+
+                var filesFile = Path.Combine(convDir, CONV_FILES_FILE);
+                if (File.Exists(filesFile))
+                {
+                    File.Delete(filesFile);
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error when deleting conversation files.");
+            return false;
+        }
+    }
+    #endregion
 
 
     #region Private methods
     private string? FindConversationDirectory(string conversationId)
     {
-        if (string.IsNullOrEmpty(conversationId)) return null;
+        if (string.IsNullOrEmpty(conversationId))
+        {
+            return null;
+        }
 
         var dir = Path.Combine(_dbSettings.FileRepository, _conversationSettings.DataDir, conversationId);
-        if (!Directory.Exists(dir)) return null;
+        if (!Directory.Exists(dir))
+        {
+            return null;
+        }
 
         return dir;
     }
 
-    private List<DialogElement> CollectDialogElements(string dialogDir)
+    private async Task<List<DialogElement>> CollectDialogElements(string dialogDir)
     {
-        var dialogs = new List<DialogElement>();
+        await _dialogLock.WaitAsync();
+        try
+        {
+            var dialogs = new List<DialogElement>();
 
-        if (!File.Exists(dialogDir)) return dialogs;
+            if (!File.Exists(dialogDir))
+            {
+                return dialogs;
+            }
 
-        var texts = File.ReadAllText(dialogDir);
-        dialogs = JsonSerializer.Deserialize<List<DialogElement>>(texts) ?? new List<DialogElement>();
-        return dialogs;
+            var texts = await File.ReadAllTextAsync(dialogDir);
+            dialogs = JsonSerializer.Deserialize<List<DialogElement>>(texts) ?? new List<DialogElement>();
+            return dialogs;
+        }
+        finally
+        {
+            _dialogLock.Release();
+        }
     }
 
     private string ParseDialogElements(List<DialogElement> dialogs)
     {
-        if (dialogs.IsNullOrEmpty()) return "[]";
+        if (dialogs.IsNullOrEmpty())
+        {
+            return "[]";
+        }
 
         return JsonSerializer.Serialize(dialogs, _options) ?? "[]";
     }
 
-    private List<StateKeyValue> CollectConversationStates(string stateFile)
+    private async Task<List<StateKeyValue>> CollectConversationStates(string stateFile)
     {
-        var states = new List<StateKeyValue>();
-        if (!File.Exists(stateFile)) return states;
+        await _stateLock.WaitAsync();
+        try
+        {
+            var states = new List<StateKeyValue>();
+            if (!File.Exists(stateFile))
+            {
+                return states;
+            }
 
-        var stateStr = File.ReadAllText(stateFile);
-        if (string.IsNullOrEmpty(stateStr)) return states;
+            var stateStr = await File.ReadAllTextAsync(stateFile);
+            if (string.IsNullOrEmpty(stateStr))
+            {
+                return states;
+            }
 
-        states = JsonSerializer.Deserialize<List<StateKeyValue>>(stateStr, _options);
-        return states ?? new List<StateKeyValue>();
+            states = JsonSerializer.Deserialize<List<StateKeyValue>>(stateStr, _options);
+            return states ?? new List<StateKeyValue>();
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
     }
 
     private List<ConversationBreakpoint> CollectConversationBreakpoints(string breakpointFile)
     {
         var breakpoints = new List<ConversationBreakpoint>();
-        if (!File.Exists(breakpointFile)) return breakpoints;
+        if (!File.Exists(breakpointFile))
+        {
+            return breakpoints;
+        }
 
         var content = File.ReadAllText(breakpointFile);
-        if (string.IsNullOrEmpty(content)) return breakpoints;
+        if (string.IsNullOrEmpty(content))
+        {
+            return breakpoints;
+        }
 
         breakpoints = JsonSerializer.Deserialize<List<ConversationBreakpoint>>(content, _options);
         return breakpoints ?? new List<ConversationBreakpoint>();
@@ -861,7 +1143,10 @@ public partial class FileRepository
             var values = state.Values.Where(x => x.MessageId != refMsgId)
                                      .Where(x => x.UpdateTime < refTime)
                                      .ToList();
-            if (values.Count == 0) continue;
+            if (values.Count == 0)
+            {
+                continue;
+            }
 
             state.Values = values;
             truncatedStates.Add(state);
@@ -891,11 +1176,14 @@ public partial class FileRepository
 
         if (Directory.Exists(contentLogDir))
         {
-            foreach (var file in Directory.GetFiles(contentLogDir))
+            foreach (var file in Directory.EnumerateFiles(contentLogDir))
             {
                 var text = File.ReadAllText(file);
                 var log = JsonSerializer.Deserialize<ContentLogOutputModel>(text);
-                if (log == null) continue;
+                if (log == null)
+                {
+                    continue;
+                }
 
                 if (log.CreatedTime >= refTime)
                 {
@@ -906,11 +1194,14 @@ public partial class FileRepository
 
         if (Directory.Exists(stateLogDir))
         {
-            foreach (var file in Directory.GetFiles(stateLogDir))
+            foreach (var file in Directory.EnumerateFiles(stateLogDir))
             {
                 var text = File.ReadAllText(file);
                 var log = JsonSerializer.Deserialize<ConversationStateLogModel>(text);
-                if (log == null) continue;
+                if (log == null)
+                {
+                    continue;
+                }
 
                 if (log.CreatedTime >= refTime)
                 {
@@ -924,7 +1215,10 @@ public partial class FileRepository
 
     private bool SaveTruncatedDialogs(string dialogDir, List<DialogElement> dialogs)
     {
-        if (string.IsNullOrEmpty(dialogDir) || dialogs == null) return false;
+        if (string.IsNullOrEmpty(dialogDir) || dialogs == null)
+        {
+            return false;
+        }
 
         var texts = ParseDialogElements(dialogs);
         File.WriteAllText(dialogDir, texts);
@@ -933,7 +1227,10 @@ public partial class FileRepository
 
     private bool SaveTruncatedStates(string stateDir, List<StateKeyValue> states)
     {
-        if (string.IsNullOrEmpty(stateDir) || states == null) return false;
+        if (string.IsNullOrEmpty(stateDir) || states == null)
+        {
+            return false;
+        }
 
         var stateStr = JsonSerializer.Serialize(states, _options);
         File.WriteAllText(stateDir, stateStr);
@@ -942,7 +1239,10 @@ public partial class FileRepository
 
     private bool SaveTruncatedLatestStates(string latestStateDir, List<StateKeyValue> states)
     {
-        if (string.IsNullOrEmpty(latestStateDir) || states == null) return false;
+        if (string.IsNullOrEmpty(latestStateDir) || states == null)
+        {
+            return false;
+        }
 
         var latestStates = BuildLatestStates(states);
         var stateStr = JsonSerializer.Serialize(latestStates, _options);
@@ -952,7 +1252,10 @@ public partial class FileRepository
 
     private bool SaveTruncatedBreakpoints(string breakpointDir, List<ConversationBreakpoint> breakpoints)
     {
-        if (string.IsNullOrEmpty(breakpointDir) || breakpoints == null) return false;
+        if (string.IsNullOrEmpty(breakpointDir) || breakpoints == null)
+        {
+            return false;
+        }
 
         var breakpointStr = JsonSerializer.Serialize(breakpoints, _options);
         File.WriteAllText(breakpointDir, breakpointStr);
@@ -961,7 +1264,10 @@ public partial class FileRepository
 
     private Dictionary<string, JsonDocument> CollectConversationLatestStates(string latestStateDir)
     {
-        if (string.IsNullOrEmpty(latestStateDir) || !File.Exists(latestStateDir)) return [];
+        if (string.IsNullOrEmpty(latestStateDir) || !File.Exists(latestStateDir))
+        {
+            return [];
+        }
 
         var str = File.ReadAllText(latestStateDir);
         var states = JsonSerializer.Deserialize<Dictionary<string, JsonDocument>>(str, _options);
@@ -979,7 +1285,10 @@ public partial class FileRepository
         foreach (var pair in states)
         {
             var value = pair.Values?.LastOrDefault();
-            if (value == null || !value.Active) continue;
+            if (value == null || !value.Active)
+            {
+                continue;
+            }
 
             try
             {
@@ -1009,7 +1318,10 @@ public partial class FileRepository
 
         for (int i = 0; i < paths.Count(); i++)
         {
-            if (elem == null) return null;
+            if (elem == null)
+            {
+                return null;
+            }
 
             var field = paths.ElementAt(i);
             if (elem.Value.ValueKind == JsonValueKind.Array)

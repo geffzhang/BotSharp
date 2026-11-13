@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using BotSharp.Abstraction.Conversations;
 using BotSharp.Abstraction.Conversations.Enums;
 using BotSharp.Abstraction.Conversations.Models;
@@ -17,9 +17,9 @@ namespace BotSharp.Plugin.Google.Core
             return "fake-conversation-id";
         }
 
-        public Dictionary<string, string> Load(string conversationId, bool isReadOnly = false)
+        public Task<Dictionary<string, string>> Load(string conversationId, bool isReadOnly = false)
         {
-            return new Dictionary<string, string> { { "Key", "Value" } };
+            return Task.FromResult(new Dictionary<string, string> { { "Key", "Value" } });
         }
 
         public string GetState(string name, string defaultValue = "")
@@ -61,15 +61,15 @@ namespace BotSharp.Plugin.Google.Core
            
         }
 
-        public void Save()
+        public Task Save()
         {
-           
+            return Task.CompletedTask;
         }
 
         public ConversationState GetCurrentState()
         {
-           
-            return new ConversationState { { "StateKey", new StateKeyValue { Key = "Key", Values = new List<StateValue>()} } };
+
+            return new ConversationState();
         }
 
         public void SetCurrentState(ConversationState state)

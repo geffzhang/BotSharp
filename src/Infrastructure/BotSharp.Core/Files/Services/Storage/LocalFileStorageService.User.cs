@@ -4,29 +4,38 @@ namespace BotSharp.Core.Files.Services;
 
 public partial class LocalFileStorageService
 {
-    public string GetUserAvatar()
+    public async Task<string> GetUserAvatar()
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var user = db.GetUserById(_user.Id);
+        var user = await db.GetUserById(_user.Id);
         var dir = GetUserAvatarDir(user?.Id);
 
-        if (!ExistDirectory(dir)) return string.Empty;
+        if (!ExistDirectory(dir))
+        {
+            return string.Empty;
+        }
 
         var found = Directory.GetFiles(dir).FirstOrDefault() ?? string.Empty;
         return found;
     }
 
-    public bool SaveUserAvatar(FileDataModel file)
+    public async Task<bool> SaveUserAvatar(FileDataModel file)
     {
-        if (file == null || string.IsNullOrEmpty(file.FileData)) return false;
+        if (file == null || string.IsNullOrEmpty(file.FileData))
+        {
+            return false;
+        }
 
         try
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            var user = db.GetUserById(_user.Id);
+            var user = await db.GetUserById(_user.Id);
             var dir = GetUserAvatarDir(user?.Id);
 
-            if (string.IsNullOrEmpty(dir)) return false;
+            if (string.IsNullOrEmpty(dir))
+            {
+                return false;
+            }
 
             if (Directory.Exists(dir))
             {

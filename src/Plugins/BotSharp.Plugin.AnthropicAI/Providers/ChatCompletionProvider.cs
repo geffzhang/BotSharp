@@ -1,31 +1,36 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using Anthropic.SDK.Common;
-using BotSharp.Abstraction.Conversations;
-using BotSharp.Abstraction.Hooks;
-using BotSharp.Abstraction.MLTasks.Settings;
+using BotSharp.Abstraction.Conversations.Enums;
+using BotSharp.Core.Infrastructures.Streams;
+using BotSharp.Core.MessageHub;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 
 namespace BotSharp.Plugin.AnthropicAI.Providers;
 
 public class ChatCompletionProvider : IChatCompletion
 {
-    public string Provider => "anthropic";
+    public virtual string Provider => "anthropic";
     public string Model => _model;
 
     protected readonly AnthropicSettings _settings;
     protected readonly IServiceProvider _services;
     protected readonly ILogger _logger;
+    private readonly IConversationStateService _state;
+
     private List<string> renderedInstructions = [];
 
     protected string _model;
 
-    public ChatCompletionProvider(AnthropicSettings settings,
+    public ChatCompletionProvider(
+        AnthropicSettings settings,
+        IServiceProvider services,
         ILogger<ChatCompletionProvider> logger,
-        IServiceProvider services)
+        IConversationStateService state)
     {
         _settings = settings;
-        _logger = logger;
         _services = services;
+        _logger = logger;
+        _state = state;
     }
 
     public async Task<RoleDialogModel> GetChatCompletions(Agent agent, List<RoleDialogModel> conversations)
@@ -38,41 +43,55 @@ public class ChatCompletionProvider : IChatCompletion
             await hook.BeforeGenerating(agent, conversations);
         }
 
-        var settingsService = _services.GetRequiredService<ILlmProviderService>();
-        var settings = settingsService.GetSetting(Provider, _model ?? agent.LlmConfig?.Model ?? "claude-3-haiku");
-
-        var client = new AnthropicClient(new APIAuthentication(settings.ApiKey));
-        var (prompt, parameters) = PrepareOptions(agent, conversations, settings);
+        var client = ProviderHelper.GetAnthropicClient(Provider, _model, _services);
+        var (prompt, parameters) = PrepareOptions(agent, conversations);
 
         var response = await client.Messages.GetClaudeMessageAsync(parameters);
 
         RoleDialogModel responseMessage;
+        var text = response.FirstMessage?.Text ?? string.Empty;
 
-        if (response.StopReason == "tool_use")
+        if (response.StopReason == StopReason.ToolUse)
         {
-            var content = response.Content.OfType<TextContent>().FirstOrDefault();
-            var toolResult = response.Content.OfType<ToolUseContent>().First();
-
-            responseMessage = new RoleDialogModel(AgentRole.Function, content?.Text ?? string.Empty)
+            // Every call the model asked for, not only the first. It routinely asks for several
+            // independent ones at once, and keeping one made it re-ask for the rest next turn.
+            var calls = response.ToolCalls
+                .Select(x => new LlmToolCall(x.Id, x.Name, x.Arguments?.ToJsonString()))
+                .ToList();
+            var toolCall = calls.FirstOrDefault();
+            responseMessage = new RoleDialogModel(AgentRole.Function, string.Empty)
             {
                 CurrentAgentId = agent.Id,
                 MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
-                ToolCallId = toolResult.Id,
-                FunctionName = toolResult.Name,
-                FunctionArgs = JsonSerializer.Serialize(toolResult.Input),
+                ToolCallId = toolCall?.Id,
+                FunctionName = toolCall?.FunctionName,
+                FunctionArgs = toolCall?.FunctionArgs,
+                ToolCalls = calls,
                 RenderedInstruction = string.Join("\r\n", renderedInstructions)
+            };
+        }
+        else if (response.StopReason == StopReason.MaxTokens)
+        {
+            _logger.LogWarning($"Action: {nameof(GetChatCompletions)}, Reason: {response.StopReason}, Agent: {agent.Name}, MaxOutputTokens: {parameters.MaxTokens}, Content:{text}");
+
+            responseMessage = new RoleDialogModel(AgentRole.Assistant, ProviderHelper.MaxTokensMessage)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                StopCompletion = true
             };
         }
         else
         {
-            var message = response.FirstMessage;
-            responseMessage = new RoleDialogModel(AgentRole.Assistant, message?.Text ?? string.Empty)
+            responseMessage = new RoleDialogModel(AgentRole.Assistant, text)
             {
                 CurrentAgentId = agent.Id,
                 MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
                 RenderedInstruction = string.Join("\r\n", renderedInstructions)
             };
         }
+
+        var tokenUsage = response.Usage;
 
         // After chat completion hook
         foreach (var hook in contentHooks)
@@ -82,50 +101,295 @@ public class ChatCompletionProvider : IChatCompletion
                 Prompt = prompt,
                 Provider = Provider,
                 Model = _model,
-                TextInputTokens = response.Usage?.InputTokens ?? 0,
-                TextOutputTokens = response.Usage?.OutputTokens ?? 0
+                ServiceTier = tokenUsage?.ServiceTier.ToString(),
+                TextInputTokens = tokenUsage?.InputTokens ?? 0,
+                CachedTextInputTokens = tokenUsage?.CacheReadInputTokens ?? 0,
+                CachedTextInputWriteTokens = tokenUsage?.CacheCreationInputTokens ?? 0,
+                TextOutputTokens = tokenUsage?.OutputTokens ?? 0
             });
         }
 
         return responseMessage;
     }
 
-    public Task<bool> GetChatCompletionsAsync(Agent agent, List<RoleDialogModel> conversations,
+    public async Task<bool> GetChatCompletionsAsync(Agent agent, List<RoleDialogModel> conversations,
         Func<RoleDialogModel, Task> onMessageReceived, Func<RoleDialogModel, Task> onFunctionExecuting)
     {
-        throw new NotImplementedException();
+        var contentHooks = _services.GetHooks<IContentGeneratingHook>(agent.Id);
+
+        // Before chat completion hook
+        foreach (var hook in contentHooks)
+        {
+            await hook.BeforeGenerating(agent, conversations);
+        }
+
+        var client = ProviderHelper.GetAnthropicClient(Provider, _model, _services);
+        var (prompt, parameters) = PrepareOptions(agent, conversations);
+
+        var response = await client.Messages.GetClaudeMessageAsync(parameters);
+
+        RoleDialogModel responseMessage;
+        var text = response.FirstMessage?.Text ?? string.Empty;
+
+        if (response.StopReason == StopReason.ToolUse)
+        {
+            // Every call the model asked for, not only the first. It routinely asks for several
+            // independent ones at once, and keeping one made it re-ask for the rest next turn.
+            var calls = response.ToolCalls
+                .Select(x => new LlmToolCall(x.Id, x.Name, x.Arguments?.ToJsonString()))
+                .ToList();
+            var toolCall = calls.FirstOrDefault();
+            responseMessage = new RoleDialogModel(AgentRole.Function, string.Empty)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                ToolCallId = toolCall?.Id,
+                FunctionName = toolCall?.FunctionName,
+                FunctionArgs = toolCall?.FunctionArgs,
+                ToolCalls = calls,
+                RenderedInstruction = string.Join("\r\n", renderedInstructions)
+            };
+
+            // Execute functions
+            await onFunctionExecuting(responseMessage);
+        }
+        else if (response.StopReason == StopReason.MaxTokens)
+        {            
+            _logger.LogWarning($"Action: {nameof(GetChatCompletionsAsync)}, Reason: {response.StopReason}, Agent: {agent.Name}, MaxOutputTokens: {parameters.MaxTokens}, Content:{text}");
+
+            responseMessage = new RoleDialogModel(AgentRole.Assistant, ProviderHelper.MaxTokensMessage)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                StopCompletion = true
+            };
+
+            await onMessageReceived(responseMessage);
+        }
+        else
+        {
+            responseMessage = new RoleDialogModel(AgentRole.Assistant, text)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,
+                RenderedInstruction = string.Join("\r\n", renderedInstructions)
+            };
+
+            await onMessageReceived(responseMessage);
+        }
+
+        var tokenUsage = response.Usage;
+
+        // After chat completion hook
+        foreach (var hook in contentHooks)
+        {
+            await hook.AfterGenerated(responseMessage, new TokenStatsModel
+            {
+                Prompt = prompt,
+                Provider = Provider,
+                Model = _model,
+                ServiceTier = tokenUsage?.ServiceTier.ToString(),
+                TextInputTokens = tokenUsage?.InputTokens ?? 0,
+                CachedTextInputTokens = tokenUsage?.CacheReadInputTokens ?? 0,
+                CachedTextInputWriteTokens = tokenUsage?.CacheCreationInputTokens ?? 0,
+                TextOutputTokens = tokenUsage?.OutputTokens ?? 0
+            });
+        }
+
+        return true;
     }
 
-    public Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations)
+    public async Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations)
     {
-        throw new NotImplementedException();
+        var client = ProviderHelper.GetAnthropicClient(Provider, _model, _services);
+        var (prompt, parameters) = PrepareOptions(agent, conversations, useStream: true);
+
+        var hub = _services.GetRequiredService<MessageHub<HubObserveData<RoleDialogModel>>>();
+        var conv = _services.GetRequiredService<IConversationService>();
+        var messageId = conversations.LastOrDefault()?.MessageId ?? string.Empty;
+
+        var contentHooks = _services.GetHooks<IContentGeneratingHook>(agent.Id);
+        // Before chat completion hook
+        foreach (var hook in contentHooks)
+        {
+            await hook.BeforeGenerating(agent, conversations);
+        }
+
+        hub.Push(new()
+        {
+            EventName = ChatEvent.BeforeReceiveLlmStreamMessage,
+            RefId = conv.ConversationId,
+            Data = new RoleDialogModel(AgentRole.Assistant, string.Empty)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = messageId
+            }
+        });
+
+        using var textStream = new RealtimeTextStream();
+        Usage? tokenUsage = null;
+
+        var responseMessage = new RoleDialogModel(AgentRole.Assistant, string.Empty)
+        {
+            CurrentAgentId = agent.Id,
+            MessageId = messageId
+        };
+
+        var streamingCancellation = _services.GetRequiredService<IConversationCancellationService>();
+        var cancellationToken = streamingCancellation.GetToken(conv.ConversationId);
+
+        try
+        {
+            await foreach (var choice in client.Messages.StreamClaudeMessageAsync(parameters, cancellationToken))
+            {
+                var startMsg = choice.StreamStartMessage;
+                var contentBlock = choice.ContentBlock;
+                var delta = choice.Delta;
+
+                tokenUsage = delta?.Usage ?? startMsg?.Usage ?? choice.Usage;
+
+                if (delta != null)
+                {
+                    if (delta.StopReason == StopReason.ToolUse)
+                    {
+                        var calls = choice.ToolCalls
+                            .Select(x => new LlmToolCall(x.Id, x.Name,
+                                x.Arguments?.ToString()?.IfNullOrEmptyAs("{}") ?? "{}"))
+                            .ToList();
+                        var toolCall = calls.FirstOrDefault();
+                        responseMessage = new RoleDialogModel(AgentRole.Function, string.Empty)
+                        {
+                            CurrentAgentId = agent.Id,
+                            MessageId = messageId,
+                            ToolCallId = toolCall?.Id,
+                            FunctionName = toolCall?.FunctionName,
+                            FunctionArgs = toolCall?.FunctionArgs ?? "{}",
+                            ToolCalls = calls
+                        };
+
+#if DEBUG
+                        foreach (var call in calls)
+                        {
+                            _logger.LogDebug($"Tool Call (id: {call.Id}) => {call.FunctionName}({call.FunctionArgs})");
+                        }
+#endif
+                    }
+                    else if (!string.IsNullOrEmpty(delta.StopReason))
+                    {
+                        var allText = ProviderHelper.ResolveStreamedContent(delta.StopReason, textStream.GetText());
+                        responseMessage = new RoleDialogModel(AgentRole.Assistant, allText)
+                        {
+                            CurrentAgentId = agent.Id,
+                            MessageId = messageId,
+                            IsStreaming = true
+                        };
+
+#if DEBUG
+                        _logger.LogDebug($"Stream text Content: {allText}");
+#endif
+                    }
+                    else
+                    {
+                        var deltaText = delta.Text ?? string.Empty;
+                        textStream.Collect(deltaText);
+
+                        hub.Push(new()
+                        {
+                            EventName = ChatEvent.OnReceiveLlmStreamMessage,
+                            RefId = conv.ConversationId,
+                            Data = new RoleDialogModel(AgentRole.Assistant, deltaText)
+                            {
+                                CurrentAgentId = agent.Id,
+                                MessageId = messageId
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Streaming was cancelled for conversation {ConversationId}", conv.ConversationId);
+        }
+
+        // Build responseMessage from collected text when cancelled before FinishReason
+        if (cancellationToken.IsCancellationRequested && string.IsNullOrEmpty(responseMessage.Content))
+        {
+            var allText = textStream.GetText();
+            responseMessage = new RoleDialogModel(AgentRole.Assistant, allText)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = messageId,
+                IsStreaming = true
+            };
+        }
+
+        hub.Push(new()
+        {
+            EventName = ChatEvent.AfterReceiveLlmStreamMessage,
+            RefId = conv.ConversationId,
+            Data = responseMessage
+        });
+
+        // After chat completion hook
+        foreach (var hook in contentHooks)
+        {
+            await hook.AfterGenerated(responseMessage, new TokenStatsModel
+            {
+                Prompt = prompt,
+                Provider = Provider,
+                Model = _model,
+                ServiceTier = tokenUsage?.ServiceTier.ToString(),
+                TextInputTokens = tokenUsage?.InputTokens ?? 0,
+                CachedTextInputTokens = tokenUsage?.CacheReadInputTokens ?? 0,
+                CachedTextInputWriteTokens = tokenUsage?.CacheCreationInputTokens ?? 0,
+                TextOutputTokens = tokenUsage?.OutputTokens ?? 0
+            });
+        }
+
+        return responseMessage;
     }
 
-    private (string, MessageParameters) PrepareOptions(Agent agent, List<RoleDialogModel> conversations,
-        LlmModelSetting settings)
+    private (string, MessageParameters) PrepareOptions(Agent agent, List<RoleDialogModel> conversations, bool useStream = false)
     {
         var agentService = _services.GetRequiredService<IAgentService>();
+        var settingsService = _services.GetRequiredService<ILlmProviderService>();
+        var settings = settingsService.GetSetting(Provider, _model);
+        var allowMultiModal = settings != null && settings.MultiModal;
         renderedInstructions = [];
 
+        var parameters = new MessageParameters()
+        {
+            Model = _model,
+            Stream = useStream,
+            Tools = new List<Anthropic.SDK.Common.Tool>(),
+            Thinking = GetThinkingParams(settings)
+        };
+
         // Prepare instruction and functions
-        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent);
+        var renderData = agentService.CollectRenderData(agent);
+        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent, renderData);
         if (!string.IsNullOrWhiteSpace(instruction))
         {
+            parameters.System = new List<SystemMessage>()
+            {
+                new SystemMessage(instruction)
+            };
             renderedInstructions.Add(instruction);
         }
 
-        /*var routing = _services.GetRequiredService<IRoutingService>();
-        var router = routing.Router;
-
-        var render = _services.GetRequiredService<ITemplateRender>();
-        var template = router.Templates.FirstOrDefault(x => x.Name == "response_with_function").Content;
-
-        var response_with_function = render.Render(template, new Dictionary<string, object>
+        var tools = new List<Anthropic.SDK.Common.Tool>();
+        foreach (var function in functions)
         {
-            { "functions", agent.Functions }
-        });
+            if (!agentService.RenderFunction(agent, function, renderData))
+            {
+                continue;
+            }
 
-        prompt += "\r\n\r\n" + response_with_function;*/
+            var property = agentService.RenderFunctionProperty(agent, function, renderData);
+            var jsonArgs = property != null ? JsonSerializer.Serialize(property, BotSharpOptions.defaultJsonOptions) : "{}";
+            tools.Add(new Function(function.Name, function.Description, JsonNode.Parse(jsonArgs)));
+        }
 
         var messages = new List<Message>();
         var filteredMessages = conversations.Select(x => x).ToList();
@@ -135,17 +399,37 @@ public class ChatCompletionProvider : IChatCompletion
             filteredMessages = filteredMessages.Where((_, idx) => idx >= firstUserMsgIdx).ToList();
         }
 
-        foreach (var conv in filteredMessages)
+        foreach (var message in filteredMessages)
         {
-            if (conv.Role == AgentRole.User)
+            if (message.Role == AgentRole.User)
             {
-                messages.Add(new Message(RoleType.User, conv.Payload ?? conv.Content));
+                var contentParts = new List<ContentBase>();
+                if (allowMultiModal && !message.Files.IsNullOrEmpty())
+                {
+                    CollectMessageContentParts(contentParts, message.Files);
+                }
+                contentParts.Add(new TextContent() { Text = message.LlmContent });
+                messages.Add(new Message
+                {
+                    Role = RoleType.User,
+                    Content = contentParts
+                });
             }
-            else if (conv.Role == AgentRole.Assistant)
+            else if (message.Role == AgentRole.Assistant)
             {
-                messages.Add(new Message(RoleType.Assistant, conv.Content));
+                var contentParts = new List<ContentBase>();
+                if (allowMultiModal && !message.Files.IsNullOrEmpty())
+                {
+                    CollectMessageContentParts(contentParts, message.Files);
+                }
+                contentParts.Add(new TextContent() { Text = message.LlmContent });
+                messages.Add(new Message
+                {
+                    Role = RoleType.Assistant,
+                    Content = contentParts
+                });
             }
-            else if (conv.Role == AgentRole.Function)
+            else if (message.Role == AgentRole.Function)
             {
                 messages.Add(new Message
                 {
@@ -154,9 +438,9 @@ public class ChatCompletionProvider : IChatCompletion
                     {
                         new ToolUseContent()
                         {
-                            Id = conv.ToolCallId,
-                            Name = conv.FunctionName,
-                            Input = JsonNode.Parse(conv.FunctionArgs ?? "{}")
+                            Id = message.ToolCallId,
+                            Name = message.FunctionName,
+                            Input = JsonNode.Parse(message.FunctionArgs ?? "{}")
                         }
                     }
                 });
@@ -168,74 +452,90 @@ public class ChatCompletionProvider : IChatCompletion
                     {
                         new ToolResultContent()
                         {
-                            ToolUseId = conv.ToolCallId,
-                            Content = [new TextContent() { Text = conv.Content }]
+                            ToolUseId = message.ToolCallId,
+                            Content = [new TextContent() { Text = message.LlmContent }]
                         }
                     }
                 });
             }
         }
 
-        var state = _services.GetRequiredService<IConversationStateService>();
-        var temperature = decimal.Parse(state.GetState("temperature", "0.0"));
-        var maxTokens = int.TryParse(state.GetState("max_tokens"), out var tokens)
-            ? tokens
-            : agent.LlmConfig?.MaxOutputTokens ?? LlmConstant.DEFAULT_MAX_OUTPUT_TOKEN;
+        var temperature = _state.GetState(LlmStateConst.TEMPERATURE, 0.0m);
+        var maxTokens = _state.GetState<int?>(LlmStateConst.MAX_TOKENS)
+            ?? agent.LlmConfig?.MaxOutputTokens ?? LlmConstant.DEFAULT_MAX_OUTPUT_TOKEN;
 
-        var parameters = new MessageParameters()
-        {
-            Messages = messages,
-            MaxTokens = maxTokens,
-            Model = settings.Name,
-            Stream = false,
-            Temperature = temperature,
-            Tools = new List<Anthropic.SDK.Common.Tool>()
-        };
-
-        if (!string.IsNullOrEmpty(instruction))
-        {
-            parameters.System = new List<SystemMessage>()
-            {
-                new SystemMessage(instruction)
-            };
-        }
-
-        ;
-
-        JsonSerializerOptions? jsonSerializationOptions = new()
-        {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            Converters = { new JsonStringEnumConverter() },
-            ReferenceHandler = ReferenceHandler.IgnoreCycles,
-        };
-
-        foreach (var fn in functions)
-        {
-            /*var inputschema = new InputSchema()
-            {
-                Type = fn.Parameters.Type,
-                Properties = new Dictionary<string, Property>()
-                {
-                    { "location", new Property() { Type = "string", Description = "The location of the weather" } },
-                    {
-                        "tempType", new Property()
-                        {
-                            Type = "string", Enum = Enum.GetNames(typeof(TempType)),
-                            Description = "The unit of temperature, celsius or fahrenheit"
-                        }
-                    }
-                },
-                Required = fn.Parameters.Required
-            };*/
-
-            string jsonString = JsonSerializer.Serialize(fn.Parameters, jsonSerializationOptions);
-            parameters.Tools.Add(new Function(fn.Name, fn.Description,
-                JsonNode.Parse(jsonString)));
-        }
+        parameters.Messages = messages;
+        parameters.Tools = tools;
+        parameters.Temperature = temperature;
+        parameters.MaxTokens = maxTokens;
 
         var prompt = GetPrompt(parameters);
-
         return (prompt, parameters);
+    }
+
+    public void SetModelName(string model)
+    {
+        _model = model;
+    }
+
+    private ThinkingParameters? GetThinkingParams(LlmModelSetting? settings)
+    {
+        if (settings?.Reasoning?.Parameters == null)
+        {
+            return null;
+        }
+
+        var param = settings.Reasoning.Parameters!;
+        var thinkingType = LlmUtility.GetModelParameter(
+            param,
+            "ThinkingType",
+            _state.GetState(LlmStateConst.THINKING_TYPE));
+        if (thinkingType.IsEqualTo("disabled"))
+        {
+            return null;
+        }
+
+        var thinking = new ThinkingParameters();
+        if (thinkingType.IsEqualTo("adaptive"))
+        {
+            thinking.Type = ThinkingType.adaptive;
+        }
+        else if (thinkingType.IsEqualTo("enabled"))
+        {
+            thinking.Type = ThinkingType.enabled;
+        }
+
+        var budgetTokens = _state.GetState<int?>(LlmStateConst.BUDGET_TOKENS);
+        if (budgetTokens == null
+            && param.TryGetValue("BudgetTokens", out var value)
+            && int.TryParse(value.Default, out var defaultBudgetTokens))
+        {
+            budgetTokens = defaultBudgetTokens;
+        }
+
+        if (budgetTokens.HasValue)
+        {
+            thinking.BudgetTokens = budgetTokens.Value;
+        }
+
+        var useInterleavedThinking = _state.GetState<bool?>(LlmStateConst.USE_INTERLEAVED_THINKING);
+        if (useInterleavedThinking == null
+            && param.TryGetValue("UseInterleavedThinking", out value)
+            && bool.TryParse(value.Default, out var defaultInterleavedThinking))
+        {
+            useInterleavedThinking = defaultInterleavedThinking;
+        }
+
+        if (useInterleavedThinking.HasValue)
+        {
+            thinking.UseInterleavedThinking = useInterleavedThinking.Value;
+        }
+
+        return thinkingType.IsEqualTo("adaptive")
+            || thinkingType.IsEqualTo("enabled")
+            || thinking.BudgetTokens > 0
+            ? thinking
+            : null;
     }
 
     private string GetPrompt(MessageParameters parameters)
@@ -285,8 +585,7 @@ public class ChatCompletionProvider : IChatCompletion
             var functions = string.Join("\r\n",
                 parameters.Tools.Select(x =>
                 {
-                    return
-                        $"\r\n{x.Function.Name}: {x.Function.Description}\r\n{JsonSerializer.Serialize(x.Function.Parameters)}";
+                    return $"\r\n{x.Function.Name}: {x.Function.Description}\r\n{JsonSerializer.Serialize(x.Function.Parameters)}";
                 }));
             prompt += $"\r\n[FUNCTIONS]\r\n{functions}\r\n";
         }
@@ -294,8 +593,51 @@ public class ChatCompletionProvider : IChatCompletion
         return prompt;
     }
 
-    public void SetModelName(string model)
+    private void CollectMessageContentParts(List<ContentBase> contentParts, List<BotSharpFile> files)
     {
-        _model = model;
+        foreach (var file in files)
+        {
+            if (!string.IsNullOrEmpty(file.FileData))
+            {
+                var (contentType, binary) = FileUtility.GetFileInfoFromData(file.FileData);
+                var contentPart = new ImageContent
+                {
+                    Source = new ImageSource
+                    {
+                        MediaType = contentType,
+                        Data = Convert.ToBase64String(binary.ToArray())
+                    }
+                };
+                contentParts.Add(contentPart);
+            }
+            else if (!string.IsNullOrEmpty(file.FileStorageUrl))
+            {
+                var fileStorage = _services.GetRequiredService<IFileStorageService>();
+                var binary = fileStorage.GetFileBytes(file.FileStorageUrl);
+                var contentType = FileUtility.GetFileContentType(file.FileStorageUrl);
+                var contentPart = new ImageContent
+                {
+                    Source = new ImageSource
+                    {
+                        MediaType = contentType,
+                        Data = Convert.ToBase64String(binary)
+                    }
+                };
+                contentParts.Add(contentPart);
+            }
+            else if (!string.IsNullOrEmpty(file.FileUrl))
+            {
+                // Claude fetches a public image URL itself.
+                var contentPart = new ImageContent
+                {
+                    Source = new ImageSource
+                    {
+                        Type = SourceType.url,
+                        Url = file.FileUrl
+                    }
+                };
+                contentParts.Add(contentPart);
+            }
+        }
     }
 }

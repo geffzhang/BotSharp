@@ -59,18 +59,18 @@ public class NaiveReasoner : IRoutingReasoner
         var inst = (response.FunctionArgs ?? response.Content).JsonContent<FunctionCallFromLlm>();
 
         // Fix LLM malformed response
-        ReasonerHelper.FixMalformedResponse(_services, inst);
+        await ReasonerHelper.FixMalformedResponse(_services, inst);
 
         return inst;
     }
 
-    public async Task<bool> AgentExecuting(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
+    public Task<bool> AgentExecuting(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
     {
         // Set user content as Planner's question
         message.FunctionName = inst.Function;
         message.FunctionArgs = inst.Arguments == null ? "{}" : JsonSerializer.Serialize(inst.Arguments);
 
-        return true;
+        return Task.FromResult(true);
     }
 
     public async Task<bool> AgentExecuted(Agent router, FunctionCallFromLlm inst, RoleDialogModel message, List<RoleDialogModel> dialogs)
@@ -85,11 +85,11 @@ public class NaiveReasoner : IRoutingReasoner
             router.TemplateDict["routing_agents"] = agents.Where(x => x.AgentId != unmatchedAgentId).ToArray();
 
             // Handover to Router;
-            context.Pop();
+            await context.Pop();
         }
         else
         {
-            context.Empty(reason: $"Agent queue is cleared by {nameof(NaiveReasoner)}");
+            await context.Empty(reason: $"Agent queue is cleared by {nameof(NaiveReasoner)}");
             // context.Push(inst.OriginalAgent, "Push user goal agent");
         }
         return true;

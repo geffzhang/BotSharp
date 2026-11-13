@@ -1,12 +1,7 @@
-using BotSharp.Plugin.SqlDriver.Interfaces;
-using BotSharp.Plugin.SqlDriver.Models;
 using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using Microsoft.Extensions.Logging;
+using MongoDB.Driver.Core.Configuration;
 using MySqlConnector;
 using Npgsql;
-using System.ComponentModel.DataAnnotations;
-using System.Data.Common;
 
 namespace BotSharp.Plugin.SqlDriver.Functions;
 
@@ -30,7 +25,7 @@ public class GetTableDefinitionFn : IFunctionCallback
         var args = JsonSerializer.Deserialize<SqlStatement>(message.FunctionArgs);
         var tables = args.Tables;
         var agentService = _services.GetRequiredService<IAgentService>();
-        var dbHook = _services.GetRequiredService<ISqlDriverHook>();
+        var dbHook = _services.GetRequiredService<IText2SqlHook>();
         var dbType = dbHook.GetDatabaseType(message);
 
         // Get table DDL from database
@@ -50,7 +45,9 @@ public class GetTableDefinitionFn : IFunctionCallback
     {
         var settings = _services.GetRequiredService<SqlDriverSetting>();
         var tableDdls = new List<string>();
-        using var connection = new MySqlConnection(settings.MySqlMetaConnectionString ?? settings.MySqlConnectionString);
+
+        var connectionString = settings.Connections.FirstOrDefault(x => x.DbType == "mysql")?.ConnectionString;
+        using var connection = new MySqlConnection(connectionString);
         connection.Open();
 
         foreach (var table in tables)
@@ -85,7 +82,8 @@ public class GetTableDefinitionFn : IFunctionCallback
     {
         var settings = _services.GetRequiredService<SqlDriverSetting>();
         var tableDdls = new List<string>();
-        using var connection = new SqlConnection(settings.SqlServerExecutionConnectionString ?? settings.SqlServerConnectionString);
+        var connectionString = settings.Connections.FirstOrDefault(x => x.DbType == "mssql")?.ConnectionString;
+        using var connection = new SqlConnection(connectionString);
         connection.Open();
 
         foreach (var table in tables)
@@ -138,7 +136,8 @@ public class GetTableDefinitionFn : IFunctionCallback
         var settings = _services.GetRequiredService<SqlDriverSetting>();
         var tableDdls = new List<string>();
         var schemas = "'onebi_hour','onebi_day'";
-        using var connection = new NpgsqlConnection(settings.RedshiftConnectionString);
+        var connectionString = settings.Connections.FirstOrDefault(x => x.DbType == "redshift")?.ConnectionString;
+        using var connection = new NpgsqlConnection(connectionString);
         connection.Open();
 
         foreach (var table in tables)

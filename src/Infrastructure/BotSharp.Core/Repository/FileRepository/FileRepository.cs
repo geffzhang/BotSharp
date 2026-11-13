@@ -26,6 +26,7 @@ public partial class FileRepository : IBotSharpRepository
     private const string AGENT_FUNCTIONS_FOLDER = "functions";
     private const string AGENT_TEMPLATES_FOLDER = "templates";
     private const string AGENT_RESPONSES_FOLDER = "responses";
+    private const string AGENT_CODES_FOLDER = "codes";
     private const string AGENT_TASKS_FOLDER = "tasks";
     private const string AGENT_TASK_PREFIX = "#metadata";
     private const string AGENT_TASK_SUFFIX = "/metadata";
@@ -36,6 +37,7 @@ public partial class FileRepository : IBotSharpRepository
     private const string BREAKPOINT_FILE = "breakpoint.json";
     private const string CONV_LATEST_STATE_FILE = "latest-state.json";
     private const string TRANSLATION_MEMORY_FILE = "memory.json";
+    private const string CONV_FILES_FILE = "conv_files.json";
 
     private const string USERS_FOLDER = "users";
     private const string USER_FILE = "user.json";
@@ -56,6 +58,8 @@ public partial class FileRepository : IBotSharpRepository
 
     private const string CRON_FILE = "cron.json";
     private const string INSTRUCTION_LOG_FOLDER = "instruction-logs";
+
+    private const string AGENT_TEMPLATE_CONFIG_FILE = "template-configs.json";
 
     public FileRepository(
         IServiceProvider services,
@@ -385,6 +389,10 @@ public partial class FileRepository : IBotSharpRepository
         var templateDir = Path.Combine(fileDir, AGENT_TEMPLATES_FOLDER);
         if (!Directory.Exists(templateDir)) return templates;
 
+        // Load template configs
+        var (configs, _) = GetAgentTemplateConfigs(fileDir);
+
+        // Load templates
         foreach (var file in Directory.GetFiles(templateDir))
         {
             var fileName = Path.GetFileName(file);
@@ -394,14 +402,20 @@ public partial class FileRepository : IBotSharpRepository
             if (extension.Equals(_agentSettings.TemplateFormat, StringComparison.OrdinalIgnoreCase))
             {
                 var content = File.ReadAllText(file);
-                templates.Add(new AgentTemplate(name, content));
+                var template = new AgentTemplate(name, content);
+                var config = configs.FirstOrDefault(x => x.Name.IsEqualTo(name));
+                if (config != null)
+                {
+                    template.LlmConfig = config.LlmConfig;
+                }
+                templates.Add(template);
             }
         }
 
         return templates;
     }
 
-    private List<AgentTask> FetchTasks(string fileDir)
+    private async Task<List<AgentTask>> FetchTasks(string fileDir)
     {
         var tasks = new List<AgentTask>();
         var taskDir = Path.Combine(fileDir, AGENT_TASKS_FOLDER);
@@ -409,7 +423,7 @@ public partial class FileRepository : IBotSharpRepository
 
         foreach (var file in Directory.GetFiles(taskDir))
         {
-            var task = ParseAgentTask(file);
+            var task = await ParseAgentTask(file);
             if (task == null) continue;
 
             tasks.Add(task);
@@ -437,11 +451,11 @@ public partial class FileRepository : IBotSharpRepository
         return responses;
     }
 
-    private Agent? ParseAgent(string agentDir)
+    private async Task<Agent?> ParseAgent(string agentDir)
     {
         if (string.IsNullOrEmpty(agentDir)) return null;
 
-        var agentJson = File.ReadAllText(Path.Combine(agentDir, AGENT_FILE));
+        var agentJson = await File.ReadAllTextAsync(Path.Combine(agentDir, AGENT_FILE));
         if (string.IsNullOrEmpty(agentJson)) return null;
 
         var agent = JsonSerializer.Deserialize<Agent>(agentJson, _options);
@@ -461,13 +475,13 @@ public partial class FileRepository : IBotSharpRepository
                     .SetResponses(responses);
     }
 
-    private AgentTask? ParseAgentTask(string taskFile)
+    private async Task<AgentTask?> ParseAgentTask(string taskFile)
     {
         if (string.IsNullOrWhiteSpace(taskFile)) return null;
 
         var fileName = taskFile.Split(Path.DirectorySeparatorChar).Last();
         var id = fileName.Split('.').First();
-        var data = File.ReadAllText(taskFile);
+        var data = await File.ReadAllTextAsync(taskFile);
         var pattern = $@"{AGENT_TASK_PREFIX}.+{AGENT_TASK_SUFFIX}";
         var metaData = Regex.Match(data, pattern, RegexOptions.Singleline);
 
@@ -487,6 +501,32 @@ public partial class FileRepository : IBotSharpRepository
     {
         var name = path.Split(Path.DirectorySeparatorChar).Last();
         return name.Split(separator);
+    }
+
+    /// <summary>
+    /// Get agent template configs: (configs, config file location)
+    /// </summary>
+    /// <param name="baseDir"></param>
+    /// <returns></returns>
+    private (List<AgentTemplateConfig>, string) GetAgentTemplateConfigs(string baseDir)
+    {
+        var configFile = Path.Combine(baseDir, AGENT_TEMPLATE_CONFIG_FILE);
+        var configs = new List<AgentTemplateConfig>();
+
+        try
+        {
+            if (File.Exists(configFile))
+            {
+                var configJson = File.ReadAllText(configFile);
+                configs = JsonSerializer.Deserialize<List<AgentTemplateConfig>>(configJson, _options) ?? [];
+            }
+            return (configs, configFile);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error when loading template configs in {configFile}", configFile);
+            return (configs, configFile);
+        }
     }
     #endregion
 }

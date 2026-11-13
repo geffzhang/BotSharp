@@ -1,6 +1,6 @@
 namespace BotSharp.Abstraction.Infrastructures.Enums;
 
-public class StateConst
+public static class StateConst
 {
     public const string EXPECTED_ACTION_AGENT = "expected_next_action_agent";
     public const string EXPECTED_GOAL_AGENT = "expected_user_goal_agent";
@@ -13,6 +13,17 @@ public class StateConst
     public const string LAZY_ROUTING_AGENT_ID = "lazy_routing_agent_id";
 
     public const string LANGUAGE = "language";
+    public const string CHANNEL = "channel";
+
+    /// <summary>
+    /// Set from the incoming request: whether the caller wants the reply streamed back as it is generated.
+    /// </summary>
+    public const string USE_STREAM_MESSAGE = "use_stream_message";
+
+    /// <summary>
+    /// Overrides <c>ToolResultTrimSetting.KeepTurns</c> for the conversation.
+    /// </summary>
+    public const string TOOL_RESULT_KEEP_TURNS = "tool_result_keep_turns";
 
     public const string SUB_CONVERSATION_ID = "sub_conversation_id";
     public const string ORIGIN_CONVERSATION_ID = "origin_conversation_id";

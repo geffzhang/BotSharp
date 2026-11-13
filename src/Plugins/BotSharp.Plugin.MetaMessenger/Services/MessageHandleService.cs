@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Conversations.Enums;
 using BotSharp.Abstraction.Conversations.Models;
@@ -59,9 +60,9 @@ public class MessageHandleService
         var conv = _services.GetRequiredService<IConversationService>();
         var routing = _services.GetRequiredService<IRoutingService>();
         routing.Context.SetMessageId(sender, inputMsg.MessageId);
-        conv.SetConversationId(sender, new List<MessageState>
+        await conv.SetConversationId(sender, new List<MessageState>
         {
-            new MessageState("channel", ConversationChannel.Messenger)
+            new MessageState(StateConst.CHANNEL, ConversationChannel.Messenger)
         });
 
         var replies = new List<IRichMessage>();

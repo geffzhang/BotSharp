@@ -1,3 +1,5 @@
+#pragma warning disable OPENAI001
+using BotSharp.Abstraction.Infrastructures.Enums;
 using OpenAI.Images;
 
 namespace BotSharp.Plugin.OpenAI.Providers.Image;
@@ -6,11 +8,24 @@ public partial class ImageCompletionProvider
 {
     public async Task<RoleDialogModel> GetImageEdits(Agent agent, RoleDialogModel message, Stream image, string imageFileName)
     {
-        var client = ProviderHelper.GetClient(Provider, _model, _services);
-        var (prompt, imageCount, options) = PrepareEditOptions(message);
+        var contentHooks = _services.GetHooks<IContentGeneratingHook>(agent.Id);
+
+        // Before generating hook
+        foreach (var hook in contentHooks)
+        {
+            await hook.BeforeGenerating(agent, [message]);
+        }
+
+        var settingsService = _services.GetRequiredService<ILlmProviderService>();
+        var settings = settingsService.GetSetting(Provider, _model);
+
+        var client = ProviderHelper.GetClient(Provider, _model, apiKey: null, _services);
+        var (prompt, imageCount, options) = PrepareEditOptions(message, settings?.Image?.Edit);
         var imageClient = client.GetImageClient(_model);
 
         var response = imageClient.GenerateImageEdits(image, imageFileName, prompt, imageCount, options);
+        var rawContent = response.GetRawResponse().Content.ToString();
+        var responseModel = JsonSerializer.Deserialize<ImageGenerationResponse>(rawContent, BotSharpOptions.defaultJsonOptions);
         var images = response.Value;
 
         var generatedImages = GetImageGenerations(images, options.ResponseFormat);
@@ -21,6 +36,23 @@ public partial class ImageCompletionProvider
             MessageId = message?.MessageId ?? string.Empty,
             GeneratedImages = generatedImages
         };
+
+        // After generating hook
+        var unitCost = GetImageGenerationUnitCost(settings?.Cost?.ImageCosts, responseModel?.Quality, responseModel?.Size);
+        foreach (var hook in contentHooks)
+        {
+            await hook.AfterGenerated(responseMessage, new TokenStatsModel
+            {
+                Prompt = prompt,
+                Provider = Provider,
+                Model = _model,
+                TextInputTokens = images?.Usage?.InputTokenDetails?.TextTokenCount ?? 0,
+                ImageInputTokens = images?.Usage?.InputTokenDetails?.ImageTokenCount ?? 0,
+                ImageOutputTokens = images?.Usage?.OutputTokenCount ?? 0,
+                ImageGenerationCount = imageCount,
+                ImageGenerationUnitCost = unitCost
+            });
+        }
 
         return await Task.FromResult(responseMessage);
     }
@@ -28,11 +60,24 @@ public partial class ImageCompletionProvider
     public async Task<RoleDialogModel> GetImageEdits(Agent agent, RoleDialogModel message,
         Stream image, string imageFileName, Stream mask, string maskFileName)
     {
-        var client = ProviderHelper.GetClient(Provider, _model, _services);
-        var (prompt, imageCount, options) = PrepareEditOptions(message);
+        var contentHooks = _services.GetHooks<IContentGeneratingHook>(agent.Id);
+
+        // Before generating hook
+        foreach (var hook in contentHooks)
+        {
+            await hook.BeforeGenerating(agent, [message]);
+        }
+
+        var settingsService = _services.GetRequiredService<ILlmProviderService>();
+        var settings = settingsService.GetSetting(Provider, _model);
+
+        var client = ProviderHelper.GetClient(Provider, _model, apiKey: null, _services);
+        var (prompt, imageCount, options) = PrepareEditOptions(message, settings?.Image?.Edit);
         var imageClient = client.GetImageClient(_model);
 
         var response = imageClient.GenerateImageEdits(image, imageFileName, prompt, mask, maskFileName, imageCount, options);
+        var rawContent = response.GetRawResponse().Content.ToString();
+        var responseModel = JsonSerializer.Deserialize<ImageGenerationResponse>(rawContent, BotSharpOptions.defaultJsonOptions);
         var images = response.Value;
 
         var generatedImages = GetImageGenerations(images, options.ResponseFormat);
@@ -44,34 +89,60 @@ public partial class ImageCompletionProvider
             GeneratedImages = generatedImages
         };
 
+        // After generating hook
+        var unitCost = GetImageGenerationUnitCost(settings?.Cost?.ImageCosts, responseModel?.Quality, responseModel?.Size);
+        foreach (var hook in contentHooks)
+        {
+            await hook.AfterGenerated(responseMessage, new TokenStatsModel
+            {
+                Prompt = prompt,
+                Provider = Provider,
+                Model = _model,
+                TextInputTokens = images?.Usage?.InputTokenDetails?.TextTokenCount ?? 0,
+                ImageInputTokens = images?.Usage?.InputTokenDetails?.ImageTokenCount ?? 0,
+                ImageOutputTokens = images?.Usage?.OutputTokenCount ?? 0,
+                ImageGenerationCount = imageCount,
+                ImageGenerationUnitCost = unitCost
+            });
+        }
+
         return await Task.FromResult(responseMessage);
     }
 
-    private (string, int, ImageEditOptions) PrepareEditOptions(RoleDialogModel message)
+    private (string, int, ImageEditOptions) PrepareEditOptions(RoleDialogModel message, ImageEditSetting? settings)
     {
         var prompt = message?.Payload ?? message?.Content ?? string.Empty;
 
-        var settingsService = _services.GetRequiredService<ILlmProviderService>();
-        var settings = settingsService.GetSetting(Provider, _model)?.Image?.Edit;
-
         var state = _services.GetRequiredService<IConversationStateService>();
-        var size = state.GetState("image_size");
-        var responseFormat = state.GetState("image_response_format");
+        var size = state.GetState(ImageStateConst.IMAGE_SIZE);
+        var quality = state.GetState(ImageStateConst.IMAGE_QUALITY);
+        var responseFormat = state.GetState(ImageStateConst.IMAGE_RESPONSE_FORMAT);
+        var background = state.GetState(ImageStateConst.IMAGE_BACKGROUND);
 
-        size = settings?.Size != null ? VerifyImageParameter(size, settings.Size.Default, settings.Size.Options) : null;
-        responseFormat = settings?.ResponseFormat != null ? VerifyImageParameter(responseFormat, settings.ResponseFormat.Default, settings.ResponseFormat.Options) : null;
+        size = LlmUtility.GetModelParameter(settings?.Parameters, "Size", size);
+        quality = LlmUtility.GetModelParameter(settings?.Parameters, "Quality", quality);
+        background = LlmUtility.GetModelParameter(settings?.Parameters, "Background", background);
+        responseFormat = LlmUtility.GetModelParameter(settings?.Parameters, "ResponseFormat", responseFormat);
 
         var options = new ImageEditOptions();
         if (!string.IsNullOrEmpty(size))
         {
             options.Size = GetImageSize(size);
         }
+        if (!string.IsNullOrEmpty(quality))
+        {
+            options.Quality = GetImageQuality(quality);
+        }
         if (!string.IsNullOrEmpty(responseFormat))
         {
             options.ResponseFormat = GetImageResponseFormat(responseFormat);
         }
+        if (!string.IsNullOrEmpty(background))
+        {
+            options.Background = GetImageBackground(background);
+        }
 
-        var count = GetImageCount(state.GetState("image_count", "1"));
+        var count = GetImageCount(state.GetState<int?>(ImageStateConst.IMAGE_COUNT));
         return (prompt, count, options);
     }
 }

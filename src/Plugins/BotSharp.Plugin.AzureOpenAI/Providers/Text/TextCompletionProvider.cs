@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Hooks;
 using BotSharp.Abstraction.MLTasks.Settings;
 using System.Net.Http;
@@ -50,15 +51,17 @@ public class TextCompletionProvider : ITextCompletion
             MessageId = messageId
         };
 
-        Task.WaitAll(contentHooks.Select(hook =>
-            hook.BeforeGenerating(agent,
+        foreach (var hook in contentHooks)
+        {
+            await hook.BeforeGenerating(agent,
                 new List<RoleDialogModel>
                 {
                     message
-                })).ToArray());
+                });
+        }
 
         var state = _services.GetRequiredService<IConversationStateService>();
-        var temperature = float.Parse(state.GetState("temperature", "0.0"));
+        var temperature = state.GetState(LlmStateConst.TEMPERATURE, 0.0f);
 
         var settingsService = _services.GetRequiredService<ILlmProviderService>();
         var modelSetting = settingsService.GetSetting(Provider, _model);
@@ -80,15 +83,17 @@ public class TextCompletionProvider : ITextCompletion
             MessageId = messageId
         };
 
-        Task.WaitAll(contentHooks.Select(hook =>
-            hook.AfterGenerated(responseMessage, new TokenStatsModel
-            {
-                Prompt = text,
-                Provider = Provider,
-                Model = _model,
-                TextInputTokens = response?.Usage?.PromptTokens ?? 0,
-                TextOutputTokens = response?.Usage?.CompletionTokens ?? 0
-            })).ToArray());
+        foreach (var hook in contentHooks)
+        {
+            await hook.AfterGenerated(responseMessage, new TokenStatsModel
+                {
+                    Prompt = text,
+                    Provider = Provider,
+                    Model = _model,
+                    TextInputTokens = response?.Usage?.PromptTokens ?? 0,
+                    TextOutputTokens = response?.Usage?.CompletionTokens ?? 0
+                });
+        }
 
         return completion.Trim();
     }

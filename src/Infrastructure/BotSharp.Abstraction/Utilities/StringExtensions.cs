@@ -1,9 +1,11 @@
+using BotSharp.Abstraction.Options;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace BotSharp.Abstraction.Utilities;
 
-public static class StringExtensions
+public static partial class StringExtensions
 {
     public static string? IfNullOrEmptyAs(this string? str, string? defaultValue)
         => string.IsNullOrEmpty(str) ? defaultValue : str;
@@ -11,12 +13,18 @@ public static class StringExtensions
     public static string SubstringMax(this string str, int maxLength)
     {
         if (string.IsNullOrEmpty(str))
+        {
             return str;
+        }
 
         if (str.Length > maxLength)
+        {
             return str.Substring(0, maxLength);
+        }
         else
+        {
             return str;
+        }
     }
 
     public static string[] SplitByNewLine(this string input)
@@ -39,16 +47,75 @@ public static class StringExtensions
 
     public static bool IsEqualTo(this string? str1, string? str2, StringComparison option = StringComparison.OrdinalIgnoreCase)
     {
-        if (str1 == null) return str2 == null;
+        if (str1 == null)
+        {
+            return str2 == null;
+        }
 
         return str1.Equals(str2, option);
     }
 
     public static string CleanStr(this string? str)
     {
-        if (string.IsNullOrWhiteSpace(str)) return string.Empty;
+        if (string.IsNullOrWhiteSpace(str))
+        {
+            return string.Empty;
+        }
 
         return str.Replace(" ", "").Replace("\t", "").Replace("\n", "").Replace("\r", "");
+    }
+
+    /// <summary>
+    /// Normalizes function name by removing namespace/agent prefixes.
+    /// LLM sometimes returns function names like "AgentName.FunctionName" or "Namespace.FunctionName".
+    /// This method extracts the actual function name. Returns original input if normalization would
+    /// yield empty/whitespace (e.g. "Agent." or "Agent/ ") to avoid downstream invalid function lookup.
+    /// </summary>
+    /// <param name="functionName">The raw function name from LLM response</param>
+    /// <returns>The normalized function name, or original if normalized would be empty/whitespace</returns>
+    public static string? NormalizeFunctionName(this string? functionName)
+    {
+        functionName = functionName?.Trim();
+        if (string.IsNullOrEmpty(functionName))
+        {
+            return functionName;
+        }
+
+        foreach (var separator in new[] { '.', '/' })
+        {
+            if (!functionName.Contains(separator))
+            {
+                continue;
+            }
+
+            var segments = functionName.Split(separator);
+            var normalized = segments.LastOrDefault()?.Trim();
+
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return functionName;
+            }
+
+            Console.WriteLine($"NormalizeFunctionName: {functionName} -> {normalized}");
+            return normalized;
+        }
+
+        return functionName;
+    }
+
+    public static string CleanJsonStr(this string? str)
+    {
+        if (string.IsNullOrWhiteSpace(str))
+        {
+            return string.Empty;
+        }
+
+        return str.Replace("```json", string.Empty).Replace("```", string.Empty).Trim();
+    }
+
+    public static T? Json<T>(this string text)
+    {
+        return JsonSerializer.Deserialize<T>(text, BotSharpOptions.defaultJsonOptions);
     }
 
     public static string JsonContent(this string text)
@@ -61,15 +128,7 @@ public static class StringExtensions
     {
         text = JsonContent(text);
 
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true,
-            AllowTrailingCommas = true
-        };
-
-        return JsonSerializer.Deserialize<T>(text, options);
+        return JsonSerializer.Deserialize<T>(text, BotSharpOptions.defaultJsonOptions);
     }
 
     public static string JsonArrayContent(this string text)
@@ -82,15 +141,7 @@ public static class StringExtensions
     {
         text = JsonArrayContent(text);
 
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true,
-            AllowTrailingCommas = true
-        };
-
-        return JsonSerializer.Deserialize<T[]>(text, options);
+        return JsonSerializer.Deserialize<T[]>(text, BotSharpOptions.defaultJsonOptions);
     }
 
     public static bool IsPrimitiveValue(this string value)
@@ -135,5 +186,26 @@ public static class StringExtensions
 
         var str = JsonSerializer.Serialize(value, jsonOptions);
         return str;
+    }
+
+    /// <summary>
+    /// Get MD5 hash of a string
+    /// </summary>
+    /// <param name="text"></param>
+    /// <returns></returns>
+    public static string GetMd5Hash(this string text)
+    {
+        using MD5 md5 = MD5.Create();
+        byte[] inputBytes = Encoding.UTF8.GetBytes(text);
+        byte[] hashBytes = md5.ComputeHash(inputBytes);
+
+        // Convert byte array to a 32-character hex string
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < hashBytes.Length; i++)
+        {
+            sb.Append(hashBytes[i].ToString("x2")); // "x2" for lowercase hex
+        }
+
+        return sb.ToString();
     }
 }

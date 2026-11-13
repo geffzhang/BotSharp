@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Utilities;
 
 namespace BotSharp.Plugin.MetaGLM.Providers;
@@ -94,7 +95,8 @@ public class ChatCompletionProvider : IChatCompletion
         renderedInstructions = [];
 
         // Prepare instruction and functions
-        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent);
+        var renderData = agentService.CollectRenderData(agent);
+        var (instruction, functions) = agentService.PrepareInstructionAndFunctions(agent, renderData);
         if (!string.IsNullOrWhiteSpace(instruction))
         {
             renderedInstructions.Add(instruction);
@@ -110,8 +112,8 @@ public class ChatCompletionProvider : IChatCompletion
         foreach (var message in samples)
         {
             messages.Add(message.Role == AgentRole.User ?
-                new MessageItem("user", message.Content) :
-                new MessageItem("assistant", message.Content));
+                new MessageItem("user", message.LlmContent) :
+                new MessageItem("assistant", message.LlmContent));
         }
 
         foreach (var function in functions)
@@ -128,13 +130,13 @@ public class ChatCompletionProvider : IChatCompletion
             }
             else if (message.Role == "user")
             {
-                var userMessage = new MessageItem("user",message.Content);
+                var userMessage = new MessageItem("user",message.LlmContent);
 
                 messages.Add(userMessage);
             }
             else if (message.Role == "assistant")
             {
-                messages.Add(new MessageItem("assistant", message.Content));
+                messages.Add(new MessageItem("assistant", message.LlmContent));
             }
         }
 
@@ -148,8 +150,8 @@ public class ChatCompletionProvider : IChatCompletion
         var prompt = GetPrompt(messages, toolcalls);
 
         //var state = _services.GetRequiredService<IConversationStateService>();
-        //var temperature = float.Parse(state.GetState("temperature", "0.0"));
-        //var samplingFactor = float.Parse(state.GetState("sampling_factor", "0.0"));
+        //var temperature = float.Parse(state.GetState(LlmStateConst.TEMPERATURE, "0.0"));
+        //var samplingFactor = float.Parse(state.GetState(LlmStateConst.SAMPLING_FACTOR, "0.0"));
         //dto.SetTemperature(temperature);  
 
         return prompt;

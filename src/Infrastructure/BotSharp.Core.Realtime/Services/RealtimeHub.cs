@@ -1,8 +1,12 @@
+using BotSharp.Abstraction.Agents.Models;
 using BotSharp.Abstraction.Functions.Models;
 using BotSharp.Abstraction.Hooks;
 using BotSharp.Abstraction.Models;
 using BotSharp.Abstraction.Options;
+using BotSharp.Abstraction.Realtime.Options;
+using BotSharp.Abstraction.Realtime.Settings;
 using BotSharp.Abstraction.Routing.Enums;
+using BotSharp.Abstraction.Settings;
 using BotSharp.Core.Infrastructures;
 
 namespace BotSharp.Core.Realtime.Services;
@@ -10,7 +14,8 @@ namespace BotSharp.Core.Realtime.Services;
 public class RealtimeHub : IRealtimeHub
 {
     private readonly IServiceProvider _services;
-    private readonly ILogger _logger;
+    private readonly ILogger<RealtimeHub> _logger;
+    private readonly RealtimeModelSettings _settings;
 
     private RealtimeHubConnection _conn;
     public RealtimeHubConnection HubConn => _conn;
@@ -18,16 +23,24 @@ public class RealtimeHub : IRealtimeHub
     private IRealTimeCompletion _completer;
     public IRealTimeCompletion Completer => _completer;
 
-    public RealtimeHub(IServiceProvider services, ILogger<RealtimeHub> logger)
+    public RealtimeHub(
+        IServiceProvider services,
+        ILogger<RealtimeHub> logger,
+        RealtimeModelSettings settings)
     {
         _services = services;
         _logger = logger;
+        _settings = settings;
     }
 
-    public async Task ConnectToModel(Func<string, Task>? responseToUser = null, Func<string, Task>? init = null, List<MessageState>? initStates = null)
+    public async Task ConnectToModel(
+        Func<string, Task>? responseToUser = null,
+        Func<string, Task>? init = null,
+        List<MessageState>? initStates = null,
+        RealtimeOptions? options = null)
     {
         var convService = _services.GetRequiredService<IConversationService>();
-        convService.SetConversationId(_conn.ConversationId, initStates ?? []);
+        await convService.SetConversationId(_conn.ConversationId, initStates ?? []);
         var conversation = await convService.GetConversation(_conn.ConversationId);
 
         var routing = _services.GetRequiredService<IRoutingService>();
@@ -35,14 +48,18 @@ public class RealtimeHub : IRealtimeHub
         var agent = await agentService.GetAgent(_conn.CurrentAgentId);
 
         var storage = _services.GetRequiredService<IConversationStorage>();
-        var dialogs = convService.GetDialogHistory();
+        var dialogs = await convService.GetDialogHistory();
         routing.Context.SetDialogs(dialogs);
         routing.Context.SetMessageId(_conn.ConversationId, Guid.Empty.ToString());
 
-        var states = _services.GetRequiredService<IConversationStateService>();
-        var settings = _services.GetRequiredService<RealtimeModelSettings>();
+        var (provider, model, isLive) = GetLlmProviderModel(agent);
 
-        _completer = _services.GetServices<IRealTimeCompletion>().First(x => x.Provider == settings.Provider);
+        _completer = ResolveCompleter(provider, isLive);
+        _completer.SetModelName(model);
+        _completer.SetOptions(options);
+
+        // Lets a provider stream display-only events, such as partial transcripts.
+        _conn.SendEventToUser = responseToUser;
 
         await _completer.Connect(
             conn: _conn, 
@@ -116,7 +133,7 @@ public class RealtimeHub : IRealtimeHub
                     {
                         // append output audio transcript to conversation
                         dialogs.Add(message);
-                        storage.Append(_conn.ConversationId, message);
+                        await storage.Append(_conn.ConversationId, message);
 
                         var convHooks = _services.GetHooksOrderByPriority<IConversationHook>(_conn.CurrentAgentId);
                         foreach (var hook in convHooks)
@@ -137,7 +154,7 @@ public class RealtimeHub : IRealtimeHub
             {
                 // append input audio transcript to conversation
                 dialogs.Add(message);
-                storage.Append(_conn.ConversationId, message);
+                await storage.Append(_conn.ConversationId, message);
                 routing.Context.SetMessageId(_conn.ConversationId, message.MessageId);
 
                 var hooks = _services.GetHooksOrderByPriority<IConversationHook>(_conn.CurrentAgentId);
@@ -151,7 +168,7 @@ public class RealtimeHub : IRealtimeHub
             },
             onInterruptionDetected: async () =>
             {
-                if (settings.InterruptResponse)
+                if (_settings.InterruptResponse)
                 {
                     // Reset states
                     _conn.ResetResponseState();
@@ -173,5 +190,56 @@ public class RealtimeHub : IRealtimeHub
         };
 
         return _conn;
+    }
+
+    /// <summary>
+    /// Picks the voice model for this conversation, and which family it belongs to.
+    ///
+    /// The agent's live config wins when it is set, because a live session is a deliberate
+    /// choice rather than a variation of a realtime one. Everything else resolves to realtime:
+    /// RealtimeModelSettings describes a realtime provider, so a live provider is never reached
+    /// by fallback, only by an agent asking for it.
+    /// </summary>
+    private (string provider, string model, bool isLive) GetLlmProviderModel(Agent agent)
+    {
+        var live = agent?.LlmConfig?.Live;
+        if (live?.IsValid == true)
+        {
+            return (live.Provider!, live.Model!, true);
+        }
+
+        var realtime = agent?.LlmConfig?.Realtime;
+        if (realtime?.IsValid == true)
+        {
+            return (realtime.Provider!, realtime.Model!, false);
+        }
+
+        if (!string.IsNullOrEmpty(_settings.Provider) && !string.IsNullOrEmpty(_settings.Model))
+        {
+            return (_settings.Provider, _settings.Model, false);
+        }
+
+        return ("openai", "gpt-realtime", false);
+    }
+
+    /// <summary>
+    /// Live providers register as <see cref="ILiveCompletion"/> only, so the two families are
+    /// resolved from separate DI lists and a provider name is looked up in one of them, never
+    /// both. A live completer still drives the hub as a realtime one - the interface derives
+    /// from <see cref="IRealTimeCompletion"/> - so nothing downstream has to know the difference.
+    /// </summary>
+    private IRealTimeCompletion ResolveCompleter(string provider, bool isLive)
+    {
+        var completer = isLive
+            ? _services.GetServices<ILiveCompletion>().FirstOrDefault(x => x.Provider == provider)
+            : _services.GetServices<IRealTimeCompletion>().FirstOrDefault(x => x.Provider == provider);
+
+        if (completer == null)
+        {
+            var family = isLive ? "live" : "realtime";
+            throw new InvalidOperationException($"Can't resolve the {family} completion provider by \"{provider}\".");
+        }
+
+        return completer;
     }
 }

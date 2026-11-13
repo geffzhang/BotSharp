@@ -1,5 +1,9 @@
-using BotSharp.Abstraction.Instructs.Models;
 using BotSharp.Abstraction.Instructs;
+using BotSharp.Abstraction.Instructs.Models;
+using BotSharp.Abstraction.Instructs.Options;
+using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Settings;
+using System.IO;
 
 namespace BotSharp.Core.Files.Services;
 
@@ -7,10 +11,12 @@ public partial class FileInstructService
 {
     public async Task<string> ReadImages(string text, IEnumerable<InstructFileModel> images, InstructOptions? options = null)
     {
+        var settingService = _services.GetRequiredService<ISettingService>();
         var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
-        var instruction = await GetAgentTemplate(innerAgentId, options?.TemplateName);
+        var instruction = await RenderAgentTemplate(innerAgentId, options?.TemplateName, options?.Data);
+        text = RenderText(text, options?.Data);
 
-        var completion = CompletionProvider.GetChatCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "gpt-4o", multiModal: true);
+        var completion = CompletionProvider.GetChatCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? Gpt4xModelConstants.GPT_4o, multiModal: true);
         var message = await completion.GetChatCompletions(new Agent()
         {
             Id = innerAgentId,
@@ -46,14 +52,16 @@ public partial class FileInstructService
     public async Task<RoleDialogModel> GenerateImage(string text, InstructOptions? options = null)
     {
         var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
-        var instruction = await GetAgentTemplate(innerAgentId, options?.TemplateName);
+        var instruction = await RenderAgentTemplate(innerAgentId, options?.TemplateName, options?.Data);
+        text = RenderText(text, options?.Data);
 
-        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "dall-e-3");
+        var textContent = text.IfNullOrEmptyAs(instruction).IfNullOrEmptyAs(string.Empty);
+        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "gpt-image-1-mini");
         var message = await completion.GetImageGeneration(new Agent()
         {
             Id = innerAgentId,
             Instruction = instruction
-        }, new RoleDialogModel(AgentRole.User, instruction ?? text));
+        }, new RoleDialogModel(AgentRole.User, textContent));
 
         await HookEmitter.Emit<IInstructHook>(_services, async hook =>
             await hook.OnResponseGenerated(new InstructResponseModel
@@ -80,6 +88,15 @@ public partial class FileInstructService
         var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
         var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "dall-e-2");
         var binary = await DownloadFile(image);
+
+        // Convert image
+        var converter = GetImageConverter(options?.ImageConverter);
+        if (converter != null)
+        {
+            binary = await converter.ConvertImage(binary);
+            image.FileExtension = "png";
+        }
+
         using var stream = binary.ToStream();
         stream.Position = 0;
 
@@ -112,18 +129,29 @@ public partial class FileInstructService
         }
 
         var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
-        var instruction = await GetAgentTemplate(innerAgentId, options?.TemplateName);
+        var instruction = await RenderAgentTemplate(innerAgentId, options?.TemplateName, options?.Data);
+        text = RenderText(text, options?.Data);
 
-        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "dall-e-2");
+        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "gpt-image-1-mini");
         var binary = await DownloadFile(image);
+
+        // Convert image
+        var converter = GetImageConverter(options?.ImageConverter);
+        if (converter != null)
+        {
+            binary = await converter.ConvertImage(binary);
+            image.FileExtension = "png";
+        }
+
         using var stream = binary.ToStream();
         stream.Position = 0;
 
-        var fileName = BuildFileName(image.FileName, image.FileExtension, "image", "png");
+        var fileName = BuildFileName(image.FileName,image.FileExtension, "image", "png");
+        var textContent = text.IfNullOrEmptyAs(instruction).IfNullOrEmptyAs(string.Empty);
         var message = await completion.GetImageEdits(new Agent()
         {
             Id = innerAgentId
-        }, new RoleDialogModel(AgentRole.User, instruction ?? text), stream, fileName);
+        }, new RoleDialogModel(AgentRole.User, textContent), stream, fileName);
 
         stream.Close();
 
@@ -151,11 +179,23 @@ public partial class FileInstructService
         }
 
         var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
-        var instruction = await GetAgentTemplate(innerAgentId, options?.TemplateName);
+        var instruction = await RenderAgentTemplate(innerAgentId, options?.TemplateName, options?.Data);
+        text = RenderText(text, options?.Data);
 
-        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "dall-e-2");
+        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "gpt-image-1-mini");
         var imageBinary = await DownloadFile(image);
         var maskBinary = await DownloadFile(mask);
+
+        // Convert image
+        var converter = GetImageConverter(options?.ImageConverter);
+        if (converter != null)
+        {
+            imageBinary = await converter.ConvertImage(imageBinary);
+            image.FileExtension = "png";
+
+            maskBinary = await converter.ConvertImage(maskBinary);
+            mask.FileExtension = "png";
+        }
 
         using var imageStream = imageBinary.ToStream();
         imageStream.Position = 0;
@@ -164,14 +204,70 @@ public partial class FileInstructService
         maskStream.Position = 0;
 
         var imageName = BuildFileName(image.FileName, image.FileExtension, "image", "png");
-        var maskName = BuildFileName(image.FileName, image.FileExtension, "mask", "png");
+        var maskName = BuildFileName(mask.FileName, mask.FileExtension, "mask", "png");
+        var textContent = text.IfNullOrEmptyAs(instruction).IfNullOrEmptyAs(string.Empty);
         var message = await completion.GetImageEdits(new Agent()
         {
             Id = innerAgentId
-        }, new RoleDialogModel(AgentRole.User, instruction ?? text), imageStream, imageName, maskStream, maskName);
+        }, new RoleDialogModel(AgentRole.User, textContent), imageStream, imageName, maskStream, maskName);
 
         imageStream.Close();
         maskStream.Close();
+
+        await HookEmitter.Emit<IInstructHook>(_services, async hook =>
+            await hook.OnResponseGenerated(new InstructResponseModel
+            {
+                AgentId = innerAgentId,
+                Provider = completion.Provider,
+                Model = completion.Model,
+                TemplateName = options?.TemplateName,
+                UserMessage = text,
+                SystemInstruction = instruction,
+                CompletionText = message.Content
+            }), innerAgentId);
+
+        return message;
+    }
+
+    public async Task<RoleDialogModel> ComposeImages(string text, InstructFileModel[] images, InstructOptions? options = null)
+    {
+        var innerAgentId = options?.AgentId ?? Guid.Empty.ToString();
+        var instruction = await RenderAgentTemplate(innerAgentId, options?.TemplateName, options?.Data);
+        text = RenderText(text, options?.Data);
+
+        var completion = CompletionProvider.GetImageCompletion(_services, provider: options?.Provider ?? "openai", model: options?.Model ?? "gpt-image-1-mini");
+
+        var streams = new List<Stream>();
+        var fileNames = new List<string>();
+        foreach (var image in images)
+        {
+            var binary = await DownloadFile(image);
+
+            // Convert image
+            var converter = GetImageConverter(options?.ImageConverter);
+            if (converter != null)
+            {
+                binary = await converter.ConvertImage(binary);
+                image.FileExtension = "png";
+            }
+
+            var stream = binary.ToStream();
+            streams.Add(stream);
+
+            var fileName = BuildFileName(image.FileName, image.FileExtension, "image", "png");
+            fileNames.Add(fileName);
+        }
+
+        var textContent = text.IfNullOrEmptyAs(instruction).IfNullOrEmptyAs(string.Empty);
+        var message = await completion.GetImageComposition(new Agent()
+        {
+            Id = innerAgentId
+        }, new RoleDialogModel(AgentRole.User, textContent), streams.ToArray(), fileNames.ToArray());
+
+        foreach (var stream in streams)
+        {
+            stream.Close();
+        }
 
         await HookEmitter.Emit<IInstructHook>(_services, async hook =>
             await hook.OnResponseGenerated(new InstructResponseModel

@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Builder;
 using System.Buffers;
 using System.ClientModel;
 using System.Net.WebSockets;
@@ -31,7 +30,6 @@ internal class AsyncWebsocketDataResultEnumerator : IAsyncEnumerator<ClientResul
     public ValueTask DisposeAsync()
     {
         ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
-        _webSocket?.Dispose();
         return new ValueTask(Task.CompletedTask);
     }
 

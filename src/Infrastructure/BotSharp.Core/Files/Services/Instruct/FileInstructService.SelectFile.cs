@@ -1,4 +1,7 @@
+using BotSharp.Abstraction.Files.Contexts;
+using BotSharp.Abstraction.Files.Options;
 using BotSharp.Abstraction.MLTasks;
+using BotSharp.Abstraction.Models;
 using BotSharp.Abstraction.Templating;
 
 namespace BotSharp.Core.Files.Services;
@@ -12,16 +15,27 @@ public partial class FileInstructService
             return Enumerable.Empty<MessageFileModel>();
         }
 
+        var routingCtx = _services.GetRequiredService<IRoutingContext>();
         var convService = _services.GetRequiredService<IConversationService>();
-        var dialogs = convService.GetDialogHistory(fromBreakpoint: options.FromBreakpoint);
-        var messageIds = GetMessageIds(dialogs, options.Offset);
 
-        var files = _fileStorage.GetMessageFiles(conversationId, messageIds, FileSourceType.User, options.ContentTypes);
-        if  (options.IncludeBotFile)
+        var dialogs = routingCtx.GetDialogs();
+        if (dialogs.IsNullOrEmpty())
         {
-            var botFiles = _fileStorage.GetMessageFiles(conversationId, messageIds, FileSourceType.Bot, options.ContentTypes);
-            files = MergeMessageFiles(messageIds, files, botFiles);
+            dialogs = await convService.GetDialogHistory(fromBreakpoint: options.FromBreakpoint);
         }
+
+        if (options.MessageLimit > 0)
+        {
+            dialogs = dialogs.TakeLast(options.MessageLimit.Value).ToList();
+        }
+
+        var messageIds = dialogs.Select(x => x.MessageId).Distinct().ToList(); 
+        var files = _fileStorage.GetMessageFiles(conversationId, messageIds, options: new()
+        {
+            Sources = options.IsIncludeBotFiles ?[FileSource.User, FileSource.Bot] : [FileSource.User],
+            ContentTypes = options.ContentTypes
+        });
+        files = MergeMessageFiles(messageIds, files);
 
         if (files.IsNullOrEmpty())
         {
@@ -31,19 +45,31 @@ public partial class FileInstructService
         return await SelectFiles(files, dialogs, options);
     }
 
-    private IEnumerable<MessageFileModel> MergeMessageFiles(IEnumerable<string> messageIds, IEnumerable<MessageFileModel> userFiles, IEnumerable<MessageFileModel> botFiles)
+    private IEnumerable<MessageFileModel> MergeMessageFiles(IEnumerable<string> messageIds, IEnumerable<MessageFileModel> files)
     {
-        var files = new List<MessageFileModel>();
+        var mergedFiles = new List<MessageFileModel>();
 
-        if (messageIds.IsNullOrEmpty()) return files;
+        if (messageIds.IsNullOrEmpty())
+        {
+            return mergedFiles;
+        }
+
+        var userFiles = files.Where(x => x.FileSource.IsEqualTo(FileSource.User));
+        var botFiles = files.Where(x => x.FileSource.IsEqualTo(FileSource.Bot));
 
         foreach (var messageId in messageIds)
         {
-            var users = userFiles.Where(x => x.MessageId == messageId).ToList();
-            var bots = botFiles.Where(x => x.MessageId == messageId).ToList();
+            var users = userFiles.Where(x => x.MessageId == messageId).OrderBy(x => x.FileIndex, new MessageFileIndexComparer()).ToList();
+            var bots = botFiles.Where(x => x.MessageId == messageId).OrderBy(x => x.FileIndex, new MessageFileIndexComparer()).ToList();
             
-            if (!users.IsNullOrEmpty()) files.AddRange(users);
-            if (!bots.IsNullOrEmpty()) files.AddRange(bots);
+            if (!users.IsNullOrEmpty())
+            {
+                mergedFiles.AddRange(users);
+            }
+            if (!bots.IsNullOrEmpty())
+            {
+                mergedFiles.AddRange(bots);
+            }
         }
 
         return files;
@@ -51,87 +77,182 @@ public partial class FileInstructService
 
     private async Task<IEnumerable<MessageFileModel>> SelectFiles(IEnumerable<MessageFileModel> files, IEnumerable<RoleDialogModel> dialogs, SelectFileOptions options)
     {
-        if (files.IsNullOrEmpty()) return new List<MessageFileModel>();
+        var res = new List<MessageFileModel>();
+        if (files.IsNullOrEmpty())
+        {
+            return res;
+        }
+        else if (files.Count() == 1)
+        {
+            return files;
+        }
 
+        var agentService = _services.GetRequiredService<IAgentService>();
         var llmProviderService = _services.GetRequiredService<ILlmProviderService>();
         var render = _services.GetRequiredService<ITemplateRender>();
         var db = _services.GetRequiredService<IBotSharpRepository>();
 
+        // Handle dialogs and files
+        var innerDialogs = (dialogs ?? []).ToList();
+        var text = !string.IsNullOrWhiteSpace(options.Description) ? options.Description : "Please follow the instruction and select file(s).";
+        innerDialogs = innerDialogs.Concat([new RoleDialogModel(AgentRole.User, text)]).ToList();
+
+        if (options.IsAttachFiles)
+        {
+            AssembleMessageFiles(innerDialogs, files, options);
+        }
+
         try
         {
-            var promptFiles = files.Select((x, idx) =>
+            // Handle instruction
+            var promptMessages = innerDialogs.Select(x =>
             {
-                return $"id: {idx + 1}, file_name: {x.FileName}.{x.FileExtension}, content_type: {x.ContentType}, author: {x.FileSource}";
+                var text = $"[Role] '{x.Role}': {x.RichContent?.Message?.Text ?? x.Payload ?? x.Content}";
+                var fileDescs = x.Files?.Select((f, fidx) => $"- message_id: '{x.MessageId}', file_index: '{f.FileIndex}', " +
+                              $"content_type: '{f.ContentType}', author: '{(x.Role == AgentRole.User ? FileSource.User : FileSource.Bot)}'");
+
+                var desc = string.Empty;
+                if (!fileDescs.IsNullOrEmpty())
+                {
+                    desc = $"[Files]: \r\n\t{string.Join("\r\n\t", fileDescs)}";
+                }
+
+                return new NameDesc(text, desc);
             }).ToList();
 
-            var agentId = !string.IsNullOrWhiteSpace(options.AgentId) ? options.AgentId : BuiltInAgentId.UtilityAssistant;
-            var template = !string.IsNullOrWhiteSpace(options.Template) ? options.Template : "util-file-select_file_instruction";
+            var agentId = !string.IsNullOrWhiteSpace(options.AgentId) ? options.AgentId : BuiltInAgentId.FileAssistant;
+            var template = !string.IsNullOrWhiteSpace(options.TemplateName) ? options.TemplateName : "select-chat-file_instruction";
+            var prompt = await db.GetAgentTemplate(agentId, template);
 
-            var foundAgent = db.GetAgent(agentId);
-            var prompt = db.GetAgentTemplate(BuiltInAgentId.UtilityAssistant, template);
-            prompt = render.Render(prompt, new Dictionary<string, object>
+            var data = new Dictionary<string, object>
             {
-                { "file_list", promptFiles }
-            });
-
-            var agent = new Agent
-            {
-                Id = foundAgent?.Id ?? BuiltInAgentId.UtilityAssistant,
-                Name = foundAgent?.Name ?? "Utility Assistant",
-                Instruction = prompt
+                { "message_files", promptMessages }
             };
 
-            var message = dialogs.LastOrDefault();
-            var text = !string.IsNullOrWhiteSpace(options.Description) ? options.Description : message?.Content;
-            if (message == null)
+            if (!options.Data.IsNullOrEmpty())
             {
-                message = new RoleDialogModel(AgentRole.User, text);
+                foreach (var item in options.Data)
+                {
+                    data[item.Key] = item.Value;
+                }
             }
-            else
-            {
-                message = RoleDialogModel.From(message, AgentRole.User, text);
-            }
+            prompt = render.Render(prompt, data);
 
-            var providerName = options.Provider ?? "openai";
-            var model = options?.Model ?? "gpt-4o-mini";
-            var provider = llmProviderService.GetProviders().FirstOrDefault(x => x == providerName);
+
+            // Build agent
+            var foundAgent = await agentService.GetAgent(agentId);
+            var agent = new Agent
+            {
+                Id = foundAgent?.Id ?? BuiltInAgentId.FileAssistant,
+                Name = foundAgent?.Name ?? "File Assistant",
+                Instruction = prompt,
+                LlmConfig = new AgentLlmConfig
+                {
+                    MaxOutputTokens = options.MaxOutputTokens,
+                    ReasoningEffortLevel = options.ReasoningEffortLevel
+                }
+            };
+
+
+            // Get ai response
+            var provider = options.Provider ?? "openai";
+            var model = options?.Model ?? "gpt-5-mini";
             var completion = CompletionProvider.GetChatCompletion(_services, provider: provider, model: model);
 
-            var response = await completion.GetChatCompletions(agent, new List<RoleDialogModel> { message });
-            var content = response?.Content ?? string.Empty;
+            var response = await completion.GetChatCompletions(agent, innerDialogs);
+            var content = response?.Content ?? "{}";
             var selecteds = JsonSerializer.Deserialize<FileSelectContext>(content, new JsonSerializerOptions
             {
                 AllowTrailingCommas = true
             });
-            var fids = selecteds?.Selecteds ?? new List<int>();
-            return files.Where((x, idx) => fids.Contains(idx + 1)).ToList();
+            var selectedFiles = selecteds?.SelectedFiles ?? new List<FileSelectItem>();
+            
+            if (!selectedFiles.IsNullOrEmpty())
+            {
+                res = files.Where(file => selectedFiles.Any(x => x.MessageId.IsEqualTo(file.MessageId)
+                                                           && x.FileIndex.IsEqualTo(file.FileIndex)
+                                                           && x.FileSource.IsEqualTo(file.FileSource))).ToList();
+            }
+            
+            return res;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, $"Error when selecting files.");
-            return new List<MessageFileModel>();
+            return [];
+        }
+        finally
+        {
+            innerDialogs.ForEach(x => x.Files = null);
         }
     }
 
-    private IEnumerable<string> GetMessageIds(IEnumerable<RoleDialogModel> conversations, int? offset = null)
+    private void AssembleMessageFiles(IEnumerable<RoleDialogModel> dialogs, IEnumerable<MessageFileModel> files, SelectFileOptions options)
     {
-        if (conversations.IsNullOrEmpty()) return Enumerable.Empty<string>();
-
-        if (offset.HasValue && offset < 1)
+        if (dialogs.IsNullOrEmpty() || files.IsNullOrEmpty())
         {
-            offset = 1;
+            return;
         }
 
-        var messageIds = new List<string>();
-        if (offset.HasValue)
+        var groupedDialogs = dialogs.GroupBy(x => x.MessageId);
+        foreach (var group in groupedDialogs)
         {
-            messageIds = conversations.Select(x => x.MessageId).Distinct().TakeLast(offset.Value).ToList();
-        }
-        else
-        {
-            messageIds = conversations.Select(x => x.MessageId).Distinct().ToList();
-        }
+            var targetMessageId = group.Key;
+            var found = files.Where(x => x.MessageId == targetMessageId);
 
-        return messageIds;
+            if (found.IsNullOrEmpty())
+            {
+                continue;
+            }
+
+            var userMsg = group.FirstOrDefault(x => x.IsFromUser);
+            if (userMsg != null)
+            {
+                var userFiles = found.Where(x => x.FileSource == FileSource.User);
+                userMsg.Files = userFiles.Select(x => new BotSharpFile
+                {
+                    ContentType = x.ContentType,
+                    FileUrl = x.FileUrl,
+                    FileStorageUrl = x.FileStorageUrl,
+                    FileName = x.FileName,
+                    FileExtension = x.FileExtension,
+                    FileIndex = x.FileIndex
+                }).ToList();
+            }
+
+            var botMsg = group.LastOrDefault(x => x.IsFromAssistant);
+            if (botMsg != null)
+            {
+                var botFiles = found.Where(x => x.FileSource == FileSource.Bot);
+                botMsg.Files = botFiles.Select(x => new BotSharpFile
+                {
+                    ContentType = x.ContentType,
+                    FileUrl = x.FileUrl,
+                    FileStorageUrl = x.FileStorageUrl,
+                    FileName = x.FileName,
+                    FileExtension = x.FileExtension,
+                    FileIndex = x.FileIndex
+                }).ToList();
+            }
+        }
+    }
+
+    private sealed class MessageFileIndexComparer : IComparer<string>
+    {
+        public int Compare(string? x, string? y)
+        {
+            if (x == null) return -1;
+            if (y == null) return 1;
+
+            var isNumx = int.TryParse(x, out var xNum);
+            var isNumy = int.TryParse(y, out var yNum);
+
+            if (isNumx && isNumy)
+            {
+                return xNum.CompareTo(yNum);
+            }
+
+            return string.Compare(x, y, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

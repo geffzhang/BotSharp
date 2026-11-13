@@ -31,14 +31,23 @@ public class CrontabWatcher : BackgroundService
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                var delay = Task.Delay(1000, stoppingToken);
-
-                await locker.LockAsync(DIST_KEY, async () =>
+                try
                 {
-                    await RunCronChecker(scope.ServiceProvider);
-                });
-
-                await delay;
+                    var isLocked = await locker.LockAsync(DIST_KEY, async () =>
+                    {
+                        await RunCronChecker(scope.ServiceProvider);
+                        await Task.Delay(1000, stoppingToken);
+                    });
+                    if (!isLocked)
+                    {
+                        await Task.Delay(1000, stoppingToken);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning($"Crontab Watcher background service error: {ex.Message}");
+                    await Task.Delay(3000, stoppingToken);
+                }
             }
 
             _logger.LogWarning("Crontab Watcher background service is stopped.");
@@ -49,10 +58,11 @@ public class CrontabWatcher : BackgroundService
     {
         var cron = services.GetRequiredService<ICrontabService>();
         var crons = await cron.GetCrontable();
+        var allowedCrons = crons.Where(cron => cron.TriggerType == CronTabItemTriggerType.BackgroundWatcher).ToList();
         var settings = services.GetRequiredService<CrontabSettings>();
         var publisher = services.GetService<IEventPublisher>();
 
-        foreach (var item in crons)
+        foreach (var item in allowedCrons)
         {
             _logger.LogDebug($"[{DateTime.UtcNow}] Cron task ({item.Title}, {item.Cron}), Last Execution Time:  {item.LastExecutionTime}");
 

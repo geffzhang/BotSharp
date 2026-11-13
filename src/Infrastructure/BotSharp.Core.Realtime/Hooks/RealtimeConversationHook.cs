@@ -6,12 +6,15 @@ namespace BotSharp.Core.Realtime.Hooks;
 public class RealtimeConversationHook : ConversationHookBase, IConversationHook
 {
     private readonly IServiceProvider _services;
+
+    public override string SelfId => string.Empty;
+
     public RealtimeConversationHook(IServiceProvider services)
     {
         _services = services;
     }
 
-    public async Task OnFunctionExecuting(RoleDialogModel message, InvokeFunctionOptions? options = null)
+    public override async Task OnFunctionExecuting(RoleDialogModel message, InvokeFunctionOptions? options = null)
     {
         var hub = _services.GetRequiredService<IRealtimeHub>();
         if (hub.HubConn == null)
@@ -30,9 +33,11 @@ public class RealtimeConversationHook : ConversationHookBase, IConversationHook
             var states = _services.GetRequiredService<IConversationStateService>();
             states.SaveStateByArgs(message.FunctionArgs?.JsonContent<JsonDocument>());
         }
+
+        await Task.CompletedTask;
     }
 
-    public async Task OnFunctionExecuted(RoleDialogModel message, InvokeFunctionOptions? options = null)
+    public override async Task OnFunctionExecuted(RoleDialogModel message, InvokeFunctionOptions? options = null)
     {
         var hub = _services.GetRequiredService<IRealtimeHub>();
         if (options?.From != InvokeSource.Llm || hub.HubConn == null)
@@ -83,5 +88,6 @@ public class RealtimeConversationHook : ConversationHookBase, IConversationHook
                 await hub.Completer.TriggerModelInference(instruction);
             }
         }
+        await Task.CompletedTask;
     }
 }

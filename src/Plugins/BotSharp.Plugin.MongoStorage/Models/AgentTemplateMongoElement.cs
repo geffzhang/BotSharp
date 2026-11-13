@@ -6,14 +6,16 @@ namespace BotSharp.Plugin.MongoStorage.Models;
 public class AgentTemplateMongoElement
 {
     public string Name { get; set; } = default!;
-    public string Content { get; set; } = default!;
+    public string Content { get; set; } = string.Empty;
+    public AgentTemplateLlmConfigMongoModel? LlmConfig { get; set; }
 
     public static AgentTemplateMongoElement ToMongoElement(AgentTemplate template)
     {
         return new AgentTemplateMongoElement
         {
             Name = template.Name,
-            Content = template.Content
+            Content = template.Content,
+            LlmConfig = AgentTemplateLlmConfigMongoModel.ToMongoModel(template.LlmConfig)
         };
     }
 
@@ -22,7 +24,8 @@ public class AgentTemplateMongoElement
         return new AgentTemplate
         {
             Name = mongoTemplate.Name,
-            Content = mongoTemplate.Content
+            Content = mongoTemplate.Content,
+            LlmConfig = AgentTemplateLlmConfigMongoModel.ToDomainModel(mongoTemplate.LlmConfig)
         };
     }
 }

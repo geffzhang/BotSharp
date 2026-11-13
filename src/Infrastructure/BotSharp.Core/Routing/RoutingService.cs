@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Routing.Models;
 using BotSharp.Abstraction.Routing.Settings;
 
@@ -30,13 +31,14 @@ public partial class RoutingService : IRoutingService
     {
         var conv = _services.GetRequiredService<IConversationService>();
         var storage = _services.GetRequiredService<IConversationStorage>();
-        storage.Append(conv.ConversationId, message);
+
+        await storage.Append(conv.ConversationId, message);
 
         dialogs.Add(message);
         Context.SetDialogs(dialogs);
 
         var routing = _services.GetRequiredService<IRoutingService>();
-        routing.Context.Push(agent.Id, "instruct directly");
+        await routing.Context.Push(agent.Id, "instruct directly");
         var agentId = routing.Context.GetCurrentAgentId();
 
         // Update next action agent's name
@@ -52,11 +54,12 @@ public partial class RoutingService : IRoutingService
         else
         {
             var state = _services.GetRequiredService<IConversationStateService>();
-            var useStreamMsg = state.GetState("use_stream_message");
+            var useStreamMsg = state.GetState<bool>(StateConst.USE_STREAM_MESSAGE);
+            var enLang = state.Equal(StateConst.LANGUAGE, LanguageType.ENGLISH);
             var options = new InvokeAgentOptions()
             {
                 From = InvokeSource.Routing,
-                UseStream = bool.TryParse(useStreamMsg, out var useStream) && useStream
+                UseStream = useStreamMsg && enLang
             };
             var ret = await routing.InvokeAgent(agentId, dialogs, options);
         }
@@ -70,7 +73,7 @@ public partial class RoutingService : IRoutingService
 #if !DEBUG
     [SharpCache(10)]
 #endif
-    protected RoutingRule[] GetRoutingRecords()
+    protected async Task<RoutingRule[]> GetRoutingRecords()
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
 
@@ -78,7 +81,7 @@ public partial class RoutingService : IRoutingService
         {
             Disabled = false
         };
-        var agents = db.GetAgents(filter);
+        var agents = await db.GetAgents(filter);
         var records = agents.Where(x => x.Type == AgentType.Task || x.Type == AgentType.Planning).SelectMany(x =>
         {
             x.RoutingRules.ForEach(r =>
@@ -95,7 +98,7 @@ public partial class RoutingService : IRoutingService
 #if !DEBUG
     [SharpCache(10)]
 #endif
-    public RoutableAgent[] GetRoutableAgents(List<string> profiles)
+    public async Task<RoutableAgent[]> GetRoutableAgents(List<string> profiles)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
 
@@ -104,8 +107,8 @@ public partial class RoutingService : IRoutingService
             Disabled = false
         };
 
-        var agents = db.GetAgents(filter);
-        var routableAgents = agents.Where(x => x.Type == AgentType.Task || x.Type == AgentType.Planning).Select(x => new RoutableAgent
+        var agents = await db.GetAgents(filter);
+        var routableAgents = agents.Where(x => x.Type == AgentType.Task || x.Type == AgentType.Planning || x.Type == AgentType.A2ARemote).Select(x => new RoutableAgent
         {
             AgentId = x.Id,
             Description = x.Description,
@@ -113,13 +116,13 @@ public partial class RoutingService : IRoutingService
             Type = x.Type,
             Profiles = x.Profiles,
             RequiredFields = x.RoutingRules
-                .Where(p => p.Required)
+                .Where(p => p.Required && p.AllowLlmFill)
                 .Select(p => new ParameterPropertyDef(p.Field, p.Description, type: p.FieldType)
                 {
                     Required = p.Required
                 }).ToList(),
             OptionalFields = x.RoutingRules
-                .Where(p => !p.Required)
+                .Where(p => !p.Required && p.AllowLlmFill)
                 .Select(p => new ParameterPropertyDef(p.Field, p.Description, type: p.FieldType)
                 {
                     Required = p.Required
@@ -144,17 +147,21 @@ public partial class RoutingService : IRoutingService
         return routableAgents;
     }
 
-    public RoutingRule[] GetRulesByAgentName(string name)
+    public async Task<RoutingRule[]> GetRulesByAgentName(string name)
     {
-        return GetRoutingRecords()
+        var records = await GetRoutingRecords();
+        return records
             .Where(x => x.AgentName.ToLower() == name.ToLower())
+            .Select(r => r.Clone())
             .ToArray();
     }
 
-    public RoutingRule[] GetRulesByAgentId(string id)
+    public async Task<RoutingRule[]> GetRulesByAgentId(string id)
     {
-        return GetRoutingRecords()
+        var records = await GetRoutingRecords();
+        return records
             .Where(x => x.AgentId == id)
+            .Select(r => r.Clone())
             .ToArray();
     }
 }

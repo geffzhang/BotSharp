@@ -1,6 +1,5 @@
 using BotSharp.Abstraction.Google.Settings;
 using BotSharp.Abstraction.Instructs;
-using BotSharp.Abstraction.MessageHub;
 using BotSharp.Abstraction.MessageHub.Observers;
 using BotSharp.Abstraction.MessageHub.Services;
 using BotSharp.Abstraction.Messaging;
@@ -8,6 +7,8 @@ using BotSharp.Abstraction.Planning;
 using BotSharp.Abstraction.Plugins.Models;
 using BotSharp.Abstraction.Settings;
 using BotSharp.Abstraction.Templating;
+using BotSharp.Core.Coding;
+using BotSharp.Core.Conversations.Hooks;
 using BotSharp.Core.Instructs;
 using BotSharp.Core.MessageHub;
 using BotSharp.Core.MessageHub.Observers;
@@ -17,7 +18,6 @@ using BotSharp.Core.Routing.Reasoning;
 using BotSharp.Core.Templating;
 using BotSharp.Core.Translation;
 using BotSharp.Core.WebSearch.Hooks;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 
 namespace BotSharp.Core.Conversations;
@@ -38,7 +38,7 @@ public class ConversationPlugin : IBotSharpPlugin
         services.AddScoped(provider =>
         {
             var settingService = provider.GetRequiredService<ISettingService>();
-            var render = provider.GetRequiredService<ITemplateRender>();
+            var render = provider.GetRequiredService<IRenderConfiguration>();
             render.RegisterType(typeof(ConversationSetting));
             return settingService.Bind<ConversationSetting>("Conversation");
         });
@@ -48,6 +48,9 @@ public class ConversationPlugin : IBotSharpPlugin
             var settingService = provider.GetRequiredService<ISettingService>();
             return settingService.Bind<GoogleApiSettings>("GoogleApi");
         });
+
+        // Streaming cancellation
+        services.AddSingleton<IConversationCancellationService, ConversationCancellationService>();
 
         // Observer and observable
         services.AddSingleton<MessageHub<HubObserveData<RoleDialogModel>>>();
@@ -70,6 +73,8 @@ public class ConversationPlugin : IBotSharpPlugin
         services.AddScoped<ITokenStatistics, TokenStatistics>();
 
         services.AddScoped<IAgentUtilityHook, WebSearchUtilityHook>();
+
+        services.AddScoped<IConversationHook, ToolResultTrimHook>();
     }
 
     public bool AttachMenu(List<PluginMenuDef> menu)

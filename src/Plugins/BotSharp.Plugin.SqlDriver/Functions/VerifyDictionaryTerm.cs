@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Routing;
 using BotSharp.Core.Infrastructures;
@@ -38,7 +39,6 @@ public class VerifyDictionaryTerm : IFunctionCallback
             Id = message.CurrentAgentId ?? string.Empty,
             Name = "sqlDriver_DictionarySearch",
             Instruction = dictionarySqlPrompt,
-            TemplateDict = new Dictionary<string, object>(),
             LlmConfig = currentAgent.LlmConfig
         };
 
@@ -49,8 +49,9 @@ public class VerifyDictionaryTerm : IFunctionCallback
         IEnumerable<dynamic>? result = null;
         if (!string.IsNullOrWhiteSpace(args.SqlStatement))
         {
-            var settings = _services.GetRequiredService<SqlDriverSetting>();
-            using var connection = new MySqlConnection(settings.MySqlExecutionConnectionString);
+            var sqlHook = _services.GetRequiredService<IText2SqlHook>();
+            var connectionString = sqlHook.GetConnectionString(message);
+            using var connection = new MySqlConnection(connectionString);
             result = connection.Query(args.SqlStatement);
         }
 
@@ -64,10 +65,10 @@ public class VerifyDictionaryTerm : IFunctionCallback
         }
 
         var states = _services.GetRequiredService<IConversationStateService>();
-        var dictionaryItems = states.GetState("dictionary_items", "");
+        var dictionaryItems = states.GetState(DataStateConst.DICTIONARY_ITEMS, "");
         var newItem = BuildDictionaryItem(args.Table, args.Reason, message.Content);
         dictionaryItems += !string.IsNullOrWhiteSpace(newItem) ? $"\r\n{newItem}\r\n" : string.Empty;
-        states.SetState("dictionary_items", dictionaryItems);
+        states.SetState(DataStateConst.DICTIONARY_ITEMS, dictionaryItems);
 
         return true;
     }

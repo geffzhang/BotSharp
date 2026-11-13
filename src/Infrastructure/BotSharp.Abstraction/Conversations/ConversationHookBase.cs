@@ -1,7 +1,14 @@
+using BotSharp.Abstraction.Repositories.Filters;
+
 namespace BotSharp.Abstraction.Conversations;
 
 public abstract class ConversationHookBase : IConversationHook
 {
+    public abstract string SelfId { get; }
+
+    public virtual bool IsMatch(string agentId)
+        => string.IsNullOrEmpty(SelfId) || SelfId == agentId;
+
     public Agent Agent { get; private set; }
 
     public Conversation Conversation { get; private set; }
@@ -22,6 +29,9 @@ public abstract class ConversationHookBase : IConversationHook
         return this;
     }
 
+    public virtual Task<string> GetConversationIntent()
+        => Task.FromResult(string.Empty);
+
     public virtual Task OnStateLoaded(ConversationState state)
         => Task.CompletedTask;
 
@@ -36,6 +46,12 @@ public abstract class ConversationHookBase : IConversationHook
         Dialogs = dialogs;
         return Task.CompletedTask;
     }
+
+    public virtual Task<string> OnConversationsListing(ConversationFilter filter)
+        => Task.FromResult(string.Empty);
+
+    public virtual Task OnConversationCreating(Conversation conversation)
+        => Task.CompletedTask;
 
     public virtual Task OnConversationEnding(RoleDialogModel message)
         => Task.CompletedTask;

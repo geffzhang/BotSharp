@@ -1,38 +1,234 @@
+using BotSharp.Abstraction.Coding;
+using BotSharp.Abstraction.Coding.Contexts;
+using BotSharp.Abstraction.Coding.Enums;
+using BotSharp.Abstraction.Coding.Utils;
+using BotSharp.Abstraction.Files.Options;
+using BotSharp.Abstraction.Files.Proccessors;
 using BotSharp.Abstraction.Instructs;
+using BotSharp.Abstraction.Instructs.Enums;
 using BotSharp.Abstraction.Instructs.Models;
+using BotSharp.Abstraction.Instructs.Options;
 using BotSharp.Abstraction.MLTasks;
+using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Shared;
 
 namespace BotSharp.Core.Instructs;
 
 public partial class InstructService
 {
-    public async Task<InstructResult> Execute(string agentId, RoleDialogModel message,
-        string? templateName = null, string? instruction = null, IEnumerable<InstructFileModel>? files = null)
+    public async Task<InstructResult> Execute(
+        string agentId,
+        RoleDialogModel message,
+        string? instruction = null,
+        string? templateName = null,
+        IEnumerable<InstructFileModel>? files = null,
+        CodeInstructOptions? codeOptions = null,
+        FileInstructOptions? fileOptions = null,
+        ResponseFormatType? responseFormat = null,
+        IDictionary<string, object>? renderData = null)
     {
         var agentService = _services.GetRequiredService<IAgentService>();
-        Agent agent = await agentService.LoadAgent(agentId);
+        var agent = await agentService.LoadAgent(agentId);
+
+        var response = new InstructResult
+        {
+            MessageId = message.MessageId,
+            Template = templateName
+        };
 
         if (agent == null)
         {
-            return new InstructResult
-            {
-                MessageId = message.MessageId,
-                Text = $"Agent (id: {agentId}) does not exist!"
-            };
+            response.Text = $"Agent (id: {agentId}) does not exist!";
+            return response;
         }
 
         if (agent.Disabled)
         {
             var content = $"This agent ({agent.Name}) is disabled, please install the corresponding plugin ({agent.Plugin.Name}) to activate this agent.";
-            return new InstructResult
-            {
-                MessageId = message.MessageId,
-                Text = content
-            };
+            response.Text = content;
+            return response;
         }
 
-        // Trigger before completion hooks
-        var hooks = _services.GetHooks<IInstructHook>(agentId);
+        // Run code template
+        var codeResponse = await RunCode(agent, message, templateName, codeOptions);
+        if (codeResponse != null)
+        {
+            return codeResponse;
+        }
+
+        response = await RunLlm(agent, message, instruction, templateName, files, fileOptions, responseFormat, renderData);
+        return response;
+    }
+
+    /// <summary>
+    /// Get code response
+    /// </summary>
+    /// <param name="agent"></param>
+    /// <param name="message"></param>
+    /// <param name="templateName"></param>
+    /// <param name="codeOptions"></param>
+    /// <returns></returns>
+    private async Task<InstructResult?> RunCode(
+        Agent agent,
+        RoleDialogModel message,
+        string? templateName,
+        CodeInstructOptions? codeOptions)
+    {
+        InstructResult? instructResult = null;
+
+        if (agent == null)
+        {
+            return instructResult;
+        }
+
+        if (codeOptions?.Disabled == true)
+        {
+            return instructResult;
+        }
+
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var state = _services.GetRequiredService<IConversationStateService>();
+        var codingSettings = _services.GetRequiredService<CodingSettings>();
+        var hooks = _services.GetHooks<IInstructHook>(agent.Id);
+
+        var codeProvider = codeOptions?.Processor ?? codingSettings.CodeExecution?.Processor;
+        codeProvider = !string.IsNullOrEmpty(codeProvider) ? codeProvider : BuiltInCodeProcessor.PyInterpreter;
+
+        var codeProcessor = _services.GetServices<ICodeProcessor>()
+                                       .FirstOrDefault(x => x.Provider.IsEqualTo(codeProvider));
+        
+        if (codeProcessor == null)
+        {
+#if DEBUG
+            _logger.LogWarning($"No code processor found. (Agent: {agent.Id}, Code processor: {codeProvider})");
+#endif
+            return instructResult;
+        }
+
+        // Get code script name
+        var scriptName = string.Empty;
+        if (!string.IsNullOrEmpty(codeOptions?.ScriptName))
+        {
+            scriptName = codeOptions.ScriptName;
+        }
+        else if (!string.IsNullOrEmpty(templateName))
+        {
+            scriptName = $"{templateName}.py";
+        }
+
+        if (string.IsNullOrEmpty(scriptName))
+        {
+#if DEBUG
+            _logger.LogWarning($"Empty code script name. (Agent: {agent.Id}, {scriptName})");
+#endif
+            return instructResult;
+        }
+
+        // Get code script
+        var scriptType = codeOptions?.ScriptType ?? AgentCodeScriptType.Src;
+        var codeScript = await agentService.GetAgentCodeScript(agent.Id, scriptName, scriptType);
+        if (string.IsNullOrWhiteSpace(codeScript?.Content))
+        {
+#if DEBUG
+            _logger.LogWarning($"Empty code script. (Agent: {agent.Id}, {scriptName})");
+#endif
+            return instructResult;
+        }
+
+        // Get code arguments
+        var arguments = codeOptions?.Arguments ?? [];
+        if (arguments.IsNullOrEmpty())
+        {
+            arguments = state.GetStates().Select(x => new KeyValue(x.Key, x.Value)).ToList();
+        }
+
+        var context = new CodeExecutionContext
+        {
+            CodeScript = codeScript,
+            Arguments = arguments
+        };
+
+        // Before code execution
+        foreach (var hook in hooks)
+        {
+            await hook.BeforeCompletion(agent, message);
+            await hook.BeforeCodeExecution(agent, context);
+
+            // Interrupted by hook
+            if (message.StopCompletion)
+            {
+                return new InstructResult
+                {
+                    MessageId = message.MessageId,
+                    Text = message.Content
+                };
+            }
+        }
+
+        // Run code script
+        var (useLock, useProcess, timeoutSeconds) = CodingUtil.GetCodeExecutionConfig(codingSettings);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        var codeResponse = codeProcessor.Run(context.CodeScript?.Content ?? string.Empty, options: new()
+        {
+            ScriptName = context.CodeScript?.Name,
+            Arguments = context.Arguments,
+            UseLock = useLock,
+            UseProcess = useProcess
+        }, cancellationToken: cts.Token);
+
+        if (codeResponse == null || !codeResponse.Success)
+        {
+            return instructResult;
+        }
+
+        instructResult = new InstructResult
+        {
+            MessageId = message.MessageId,
+            Template = context.CodeScript?.Name,
+            Text = codeResponse.Result
+        };
+
+        var codeExecution = new CodeExecutionResponseModel
+        {
+            CodeProcessor = codeProcessor.Provider,
+            CodeScript = context.CodeScript,
+            ExecutionResult = codeResponse,
+            Text = message.Content,
+            Arguments = context.Arguments?.DistinctBy(x => x.Key).ToDictionary(x => x.Key, x => x.Value ?? string.Empty)
+        };
+
+        // After code execution
+        foreach (var hook in hooks)
+        {
+            await hook.AfterCompletion(agent, instructResult);
+            await hook.AfterCodeExecution(agent, context, codeExecution);
+        }
+
+        return instructResult;
+    }
+
+
+    private async Task<InstructResult> RunLlm(
+        Agent agent,
+        RoleDialogModel message,
+        string? instruction,
+        string? templateName,
+        IEnumerable<InstructFileModel>? files = null,
+        FileInstructOptions? fileOptions = null,
+        ResponseFormatType? responseFormat = null,
+        IDictionary<string, object>? renderData = null)
+    {
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var state = _services.GetRequiredService<IConversationStateService>();
+
+        var response = new InstructResult
+        {
+            MessageId = message.MessageId,
+            Template = templateName
+        };
+
+        // Before completion hooks
+        var hooks = _services.GetHooks<IInstructHook>(agent.Id);
         foreach (var hook in hooks)
         {
             await hook.BeforeCompletion(agent, message);
@@ -50,19 +246,28 @@ public partial class InstructService
 
         var provider = string.Empty;
         var model = string.Empty;
+        var result = string.Empty;
 
         // Render prompt
-        var prompt = string.IsNullOrEmpty(templateName) ?
-            agentService.RenderInstruction(agent) :
-            agentService.RenderTemplate(agent, templateName);
+        var prompt = string.Empty;
+        var llmConfig = agent.LlmConfig;
+
+        if (!string.IsNullOrEmpty(templateName))
+        {
+            prompt = agentService.RenderTemplate(agent, templateName, renderData);
+            var templateLlmConfig = agent.Templates?.FirstOrDefault(x => x.Name.IsEqualTo(templateName))?.LlmConfig;
+            if (templateLlmConfig?.IsValid == true)
+            {
+                llmConfig = new AgentLlmConfig(templateLlmConfig);
+            }
+        }
+        else
+        {
+            prompt = agentService.RenderInstruction(agent, renderData);
+        }
 
         var completer = CompletionProvider.GetCompletion(_services,
-            agentConfig: agent.LlmConfig);
-
-        var response = new InstructResult
-        {
-            MessageId = message.MessageId
-        };
+            agentConfig: llmConfig);
 
         if (completer is ITextCompletion textCompleter)
         {
@@ -70,7 +275,7 @@ public partial class InstructService
             provider = textCompleter.Provider;
             model = textCompleter.Model;
 
-            var result = await textCompleter.GetCompletion(prompt, agentId, message.MessageId);
+            result = await GetTextCompletion(textCompleter, agent, prompt, message.MessageId);
             response.Text = result;
         }
         else if (completer is IChatCompletion chatCompleter)
@@ -84,30 +289,51 @@ public partial class InstructService
                 prompt = message.Content;
             }
 
-            var result = await chatCompleter.GetChatCompletions(new Agent
+            IFileProcessor? fileProcessor = null;
+            if (!files.IsNullOrEmpty() && fileOptions != null)
             {
-                Id = agentId,
-                Name = agent.Name,
-                Instruction = instruction
-            }, new List<RoleDialogModel>
+                fileProcessor = _services.GetServices<IFileProcessor>()
+                                         .FirstOrDefault(x => x.Provider.IsEqualTo(fileOptions.Processor));
+            }
+
+            if (fileProcessor != null)
             {
-                new RoleDialogModel(AgentRole.User, prompt)
+                var fileResponse = await fileProcessor.HandleFilesAsync(agent, prompt, files, new FileHandleOptions
                 {
-                    CurrentAgentId = agentId,
-                    MessageId = message.MessageId,
-                    Files = files?.Select(x => new BotSharpFile { FileUrl = x.FileUrl, FileData = x.FileData, ContentType = x.ContentType }).ToList() ?? []
-                }
-            });
-            response.Text = result.Content;
+                    Provider = provider,
+                    Model = model,
+                    Instruction = instruction,
+                    UserMessage = message.Content,
+                    TemplateName = templateName,
+                    InvokeFrom = $"{nameof(InstructService)}.{nameof(Execute)}",
+                    Data = state.GetStates().ToDictionary(x => x.Key, x => (object)x.Value)
+                });
+                result = fileResponse.Result.IfNullOrEmptyAs(string.Empty);
+            }
+            else
+            {
+                result = await GetChatCompletion(chatCompleter, agent, instruction, prompt, message.MessageId, llmConfig, files);
+            }
+
+            // Repair JSON format if needed
+            responseFormat ??= agentService.GetTemplateResponseFormat(agent, templateName);
+            if (responseFormat == ResponseFormatType.Json)
+            {
+                var jsonRepairService = _services.GetRequiredService<IJsonRepairService>();
+                result = await jsonRepairService.RepairAsync(result);
+            }
+            response.Text = result;
         }
 
-
+        response.LogId = Guid.NewGuid().ToString();
+        // After completion hooks
         foreach (var hook in hooks)
         {
             await hook.AfterCompletion(agent, response);
             await hook.OnResponseGenerated(new InstructResponseModel
             {
-                AgentId = agentId,
+                LogId = response.LogId,
+                AgentId = agent.Id,
                 Provider = provider,
                 Model = model,
                 TemplateName = templateName,
@@ -118,5 +344,44 @@ public partial class InstructService
         }
 
         return response;
+    }
+
+
+    private async Task<string> GetTextCompletion(
+        ITextCompletion textCompleter,
+        Agent agent,
+        string text,
+        string messageId)
+    {
+        var result = await textCompleter.GetCompletion(text, agent.Id, messageId);
+        return result;
+    }
+
+    private async Task<string> GetChatCompletion(
+        IChatCompletion chatCompleter,
+        Agent agent,
+        string instruction,
+        string text,
+        string messageId,
+        AgentLlmConfig? llmConfig = null,
+        IEnumerable<InstructFileModel>? files = null)
+    {
+        var result = await chatCompleter.GetChatCompletions(new Agent
+        {
+            Id = agent.Id,
+            Name = agent.Name,
+            Instruction = instruction,
+            LlmConfig = llmConfig ?? agent.LlmConfig
+        }, new List<RoleDialogModel>
+        {
+            new RoleDialogModel(AgentRole.User, text)
+            {
+                CurrentAgentId = agent.Id,
+                MessageId = messageId,
+                Files = files?.Select(x => new BotSharpFile { FileUrl = x.FileUrl, FileData = x.FileData, ContentType = x.ContentType }).ToList() ?? []
+            }
+        });
+
+        return result.Content;
     }
 }

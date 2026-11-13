@@ -1,0 +1,70 @@
+using BotSharp.Plugin.Membase.Models.Graph;
+using Refit;
+
+namespace BotSharp.Plugin.Membase.Interfaces;
+
+/// <summary>
+/// Membase REST API interface
+/// https://membase.dev/graph-api-reference
+/// </summary>
+public interface IMembaseApi
+{
+    [Get("/graph/{graphId}")]
+    Task<GraphInfo> GetGraphInfoAsync(string graphId);
+
+    [Post("/cypher/execute")]
+    Task<CypherQueryResponse> CypherQueryAsync([Query] string graphId, [Body] CypherQueryRequest request);
+
+    #region Node
+    [Get("/graph/{graphId}/node/{nodeId}")]
+    Task<Node> GetNodeAsync(string graphId, string nodeId);
+
+    [Post("/graph/{graphId}/node")]
+    Task<Node> CreateNodeAsync(string graphId, [Body] NodeCreationModel node);
+
+    [Put("/graph/{graphId}/node/{nodeId}")]
+    Task<Node> UpdateNodeAsync(string graphId, string nodeId, [Body] NodeUpdateModel node);
+
+    [Put("/graph/{graphId}/node/{nodeId}/merge")]
+    Task<Node> MergeNodeAsync(string graphId, string nodeId, [Body] NodeUpdateModel node);
+
+    [Delete("/graph/{graphId}/node/{nodeId}")]
+    Task DeleteNodeAsync(string graphId, string nodeId);
+    #endregion
+
+    #region Edge
+    [Get("/graph/{graphId}/edge/{edgeId}")]
+    Task<Edge> GetEdgeAsync(string graphId, string edgeId);
+
+    [Post("/graph/{graphId}/edge")]
+    Task<Edge> CreateEdgeAsync(string graphId, [Body] EdgeCreationModel edge);
+
+    [Put("/graph/{graphId}/edge/{edgeId}")]
+    Task<Edge> UpdateEdgeAsync(string graphId, string edgeId, [Body] EdgeUpdateModel edge);
+
+    [Delete("/graph/{graphId}/edge/{edgeId}")]
+    Task DeleteEdgeAsync(string graphId, string edgeId);
+    #endregion
+
+    #region PGT
+    [Get("/graph/{graphId}/pgt-definitions/{definitionId}")]
+    Task<PgtDefinition> GetPgtDefinitionAsync(string graphId, string definitionId);
+
+    [Post("/graph/{graphId}/pgt-definitions/{definitionId}/simulate")]
+    Task<PgtSimulationResponse> SimulatePgtDefinitionAsync(string graphId, string definitionId, [Body] PgtSimulationRequest request);
+
+    [Post("/graph/{graphId}/pgt-definitions/{definitionId}/traverse")]
+    Task<PgtTraversalResponse> TraversePgtDefinitionAsync(string graphId, string definitionId, [Body] PgtTraversalRequest request);
+
+    [Post("/graph/{graphId}/pgt-definitions/{definitionId}/validate")]
+    Task<PgtValidationResponse> ValidatePgtDefinitionAsync(string graphId, string definitionId, [Body] PgtValidationRequest request);
+
+    [Post("/graph/{graphId}/pgt-external/{correlationId}/complete")]
+    Task<PgtExternalCompleteResponse> CompletePgtExternalAsync(string graphId, string correlationId, [FromBody] object emptyBody);
+    #endregion
+
+    #region Procedure
+    [Post("/graph/{graphId}/procedures/{procedureName}/execute")]
+    Task<ProcedureExecuteResponse> ExecuteProcedureAsync(string graphId, string procedureName, [Body] ProcedureExecuteRequest? request = null);
+    #endregion
+}

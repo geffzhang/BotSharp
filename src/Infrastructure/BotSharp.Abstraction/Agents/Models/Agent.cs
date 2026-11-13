@@ -1,9 +1,11 @@
 using BotSharp.Abstraction.Functions.Models;
 using BotSharp.Abstraction.Plugins.Models;
 using BotSharp.Abstraction.Tasks.Models;
+using System.Diagnostics;
 
 namespace BotSharp.Abstraction.Agents.Models;
 
+[DebuggerStepThrough]
 public class Agent
 {
     public string Id { get; set; } = string.Empty;
@@ -162,6 +164,12 @@ public class Agent
     public override string ToString()
         => $"{Name} {Id}";
 
+
+    /// <summary>
+    /// Copies every member, including the ones <see cref="Clone"/> leaves out. Lists and nested objects
+    /// are still shared with the source: replace any of them before changing it.
+    /// </summary>
+    public Agent ShallowCopy() => (Agent)MemberwiseClone();
 
     public static Agent Clone(Agent agent)
     {

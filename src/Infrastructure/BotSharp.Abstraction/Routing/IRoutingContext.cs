@@ -10,14 +10,15 @@ public interface IRoutingContext
     string ConversationId { get; }
     string MessageId { get; }
     void SetMessageId(string conversationId, string messageId);
+    void SetMessageAgentId(string agentId);
     bool IsEmpty { get; }
     string IntentName { get; set; }
     int AgentCount { get; }
-    void Push(string agentId, string? reason = null, bool updateLazyRouting = true);
-    void Pop(string? reason = null, bool updateLazyRouting = true);
-    void PopTo(string agentId, string reason, bool updateLazyRouting = true);
-    void Replace(string agentId, string? reason = null, bool updateLazyRouting = true);
-    void Empty(string? reason = null);
+    Task Push(string agentId, string? reason = null, bool updateLazyRouting = true);
+    Task Pop(string? reason = null, bool updateLazyRouting = true);
+    Task PopTo(string agentId, string reason, bool updateLazyRouting = true);
+    Task Replace(string agentId, string? reason = null, bool updateLazyRouting = true);
+    Task Empty(string? reason = null);
 
 
     int CurrentRecursionDepth { get; }
@@ -31,6 +32,7 @@ public interface IRoutingContext
     void ResetAgentStack();
 
     void SetDialogs(List<RoleDialogModel> dialogs);
+    void AddDialogs(List<RoleDialogModel> dialogs);
     List<RoleDialogModel> GetDialogs();
     void ResetDialogs();
 }

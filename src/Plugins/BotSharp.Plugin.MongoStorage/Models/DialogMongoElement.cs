@@ -47,10 +47,13 @@ public class DialogMetaDataMongoElement
     public string MessageId { get; set; } = default!;
     public string MessageType { get; set; } = default!;
     public string? MessageLabel { get; set; }
+    public string? ToolCallId { get; set; }
     public string? FunctionName { get; set; }
     public string? FunctionArgs { get; set; }
-    public string? ToolCallId { get; set; }
+    public Dictionary<string, string?>? Thought { get; set; }
+    public Dictionary<string, string?>? MetaData { get; set; }
     public string? SenderId { get; set; }
+    public bool ExcludeFromContext { get; set; }
     public DateTime CreateTime { get; set; }
 
     public static DialogMetaData ToDomainElement(DialogMetaDataMongoElement meta)
@@ -62,28 +65,34 @@ public class DialogMetaDataMongoElement
             MessageId = meta.MessageId,
             MessageType = meta.MessageType,
             MessageLabel = meta.MessageLabel,
+            ToolCallId = meta.ToolCallId,
             FunctionName = meta.FunctionName,
             FunctionArgs = meta.FunctionArgs,
-            ToolCallId = meta.ToolCallId,
+            Thought = meta.Thought,
+            MetaData = meta.MetaData,
             SenderId = meta.SenderId,
-            CreatedTime = meta.CreateTime,
+            ExcludeFromContext = meta.ExcludeFromContext,
+            CreatedTime = meta.CreateTime
         };
     }
 
     public static DialogMetaDataMongoElement ToMongoElement(DialogMetaData meta)
     {
         return new DialogMetaDataMongoElement
-        { 
+        {
             Role = meta.Role,
             AgentId = meta.AgentId,
             MessageId = meta.MessageId,
             MessageType = meta.MessageType,
             MessageLabel = meta.MessageLabel,
+            ToolCallId = meta.ToolCallId,
             FunctionName = meta.FunctionName,
             FunctionArgs = meta.FunctionArgs,
-            ToolCallId = meta.ToolCallId,
+            Thought = meta.Thought,
+            MetaData = meta.MetaData,
             SenderId = meta.SenderId,
-            CreateTime = meta.CreatedTime,
+            ExcludeFromContext = meta.ExcludeFromContext,
+            CreateTime = meta.CreatedTime
         };
     }
 }

@@ -1,0 +1,212 @@
+using BotSharp.Abstraction.Agents.Models;
+using BotSharp.Abstraction.Infrastructures.Attributes;
+using BotSharp.Abstraction.Repositories;
+using BotSharp.Abstraction.Tasks;
+
+namespace BotSharp.OpenAPI.Controllers;
+
+[Authorize]
+[ApiController]
+public partial class AgentController : ControllerBase
+{
+    private readonly IAgentService _agentService;
+    private readonly IAgentTaskService _agentTaskService;
+    private readonly IUserIdentity _user;
+    private readonly IServiceProvider _services;
+ 
+    public AgentController(
+        IAgentService agentService,
+        IAgentTaskService agentTaskService,
+        IUserIdentity user,
+        IServiceProvider services)
+    {
+        _agentService = agentService;
+        _agentTaskService = agentTaskService;
+        _user = user;
+        _services = services;
+     }
+
+    [HttpGet("/agent/settings")]
+    public AgentSettings GetSettings()
+    {
+        var settings = _services.GetRequiredService<AgentSettings>();
+        return settings;
+    }
+
+    [HttpGet("/agent/{id}")]
+    public async Task<AgentViewModel?> GetAgent([FromRoute] string id)
+    {
+        var pagedAgents = await _agentService.GetAgents(new AgentFilter
+        {
+            AgentIds = [id]
+        });
+
+        var cachedAgent = pagedAgents.Items.FirstOrDefault();
+        if (cachedAgent == null) return null;
+
+        // GetAgents is cached and shared with every other caller. Inherit into a copy with its own lists,
+        // and give the view its own routing rules, because RedirectToAgentName is written to them below.
+        var foundAgent = cachedAgent.ShallowCopy();
+        foundAgent.Templates = cachedAgent.Templates?.ToList() ?? [];
+        foundAgent.Functions = cachedAgent.Functions?.ToList() ?? [];
+        foundAgent.RoutingRules = cachedAgent.RoutingRules?.Select(x => x.Clone()).ToList() ?? [];
+
+        await _agentService.InheritAgent(foundAgent);
+        var targetAgent = AgentViewModel.FromAgent(foundAgent);
+        var agentSetting = _services.GetRequiredService<AgentSettings>();
+        targetAgent.IsHost = targetAgent.Id == agentSetting.HostAgentId;
+
+        var redirectAgentIds = targetAgent.RoutingRules
+                                          .Where(x => !string.IsNullOrEmpty(x.RedirectTo))
+                                          .Select(x => x.RedirectTo)
+                                          .ToList();
+
+        var redirectAgents = await _agentService.GetAgents(new AgentFilter
+        {
+            AgentIds = redirectAgentIds,
+            Pager = new() { Size = redirectAgentIds.Count }
+        });
+        foreach (var rule in targetAgent.RoutingRules)
+        {
+            var found = redirectAgents.Items.FirstOrDefault(x => x.Id == rule.RedirectTo);
+            if (found == null) continue;
+            
+            rule.RedirectToAgentName = found.Name;
+        }
+
+        var userService = _services.GetRequiredService<IUserService>();
+        var auth = await userService.GetUserAuthorizations(new List<string> { targetAgent.Id });
+        targetAgent.Actions = auth.GetAllowedAgentActions(targetAgent.Id);
+        return targetAgent;
+    }
+
+    [HttpGet("/agents")]
+    public async Task<PagedItems<AgentViewModel>> GetAgents([FromQuery] AgentFilter filter, [FromQuery] bool checkAuth = false)
+    {
+        var agentSetting = _services.GetRequiredService<AgentSettings>();
+        var userService = _services.GetRequiredService<IUserService>();
+
+        List<AgentViewModel> agents;
+        var pagedAgents = await _agentService.GetAgents(filter);
+
+        if (!checkAuth)
+        {
+            agents = pagedAgents?.Items?.Select(x => AgentViewModel.FromAgent(x))?.ToList() ?? [];
+            return new PagedItems<AgentViewModel>
+            {
+                Items = agents,
+                Count = pagedAgents?.Count ?? 0
+            };
+        }
+
+        var auth = await userService.GetUserAuthorizations(pagedAgents.Items.Select(x => x.Id));
+        agents = pagedAgents?.Items?.Select(x =>
+        {
+            var model = AgentViewModel.FromAgent(x);
+            model.Actions = auth.GetAllowedAgentActions(x.Id);
+            return model;
+        })?.ToList() ?? [];
+
+        return new PagedItems<AgentViewModel>
+        {
+            Items = agents,
+            Count = pagedAgents?.Count ?? 0
+        };
+    }
+
+    [HttpPost("/agent")]
+    public async Task<ActionResult<AgentViewModel>> CreateAgent(AgentCreationModel agent)
+    {
+        if (!string.IsNullOrEmpty(agent.Id))
+        {
+            if (!Guid.TryParse(agent.Id, out _))
+            {
+                return BadRequest($"Invalid agent id: {agent.Id}");
+            }
+
+            var db = _services.GetRequiredService<IBotSharpRepository>();
+            if (await db.GetAgent(agent.Id, basicsOnly: true) != null)
+            {
+                return Conflict($"Agent {agent.Id} already exists.");
+            }
+
+            var sameName = await db.GetAgents(new AgentFilter { AgentNames = [agent.Name] });
+            if (sameName.Any())
+            {
+                return Conflict($"Agent named \"{agent.Name}\" already exists.");
+            }
+        }
+
+        var createdAgent = await _agentService.CreateAgent(agent.ToAgent());
+        return AgentViewModel.FromAgent(createdAgent);
+    }
+
+    [BotSharpAuth]
+    [HttpPost("/refresh-agents")]
+    public async Task<string> RefreshAgents([FromBody] AgentMigrationModel request)
+    {
+        return await _agentService.RefreshAgents(request?.AgentIds);
+    }
+
+    [HttpGet("/file-agents")]
+    public Task<List<IdName>> GetFileAgents() => _agentService.GetFileAgents();
+
+    [HttpPut("/agent/{agentId}")]
+    public async Task UpdateAgent([FromRoute] string agentId, [FromBody] AgentUpdateModel agent)
+    {
+        var model = agent.ToAgent();
+        model.Id = agentId;
+        await _agentService.UpdateAgent(model, AgentField.All);
+    }
+
+    [HttpPatch("/agent/{agentId}/{field}")]
+    public async Task PatchAgentByField([FromRoute] string agentId, AgentField field, [FromBody] AgentUpdateModel agent)
+    {
+        var model = agent.ToAgent();
+        model.Id = agentId;
+        await _agentService.UpdateAgent(model, field);
+    }
+
+    [HttpPatch("/agent/{agentId}/templates")]
+    public async Task<string> PatchAgentTemplates([FromRoute] string agentId, [FromBody] AgentTemplatePatchModel agent)
+    {
+        var model = agent.ToAgent();
+        model.Id = agentId;
+        return await _agentService.PatchAgentTemplate(model);
+    }
+
+    [HttpDelete("/agent/{agentId}")]
+    public async Task<bool> DeleteAgent([FromRoute] string agentId, [FromBody] AgentDeleteRequest request)
+    {
+        return await _agentService.DeleteAgent(agentId, request?.Options);
+    }
+
+    [HttpGet("/agent/options")]
+    public async Task<List<IdName>> GetAgentOptions()
+    {
+        return await _agentService.GetAgentOptions();
+    }
+
+    [HttpGet("/agent/utility/options")]
+    public async Task<IEnumerable<AgentUtility>> GetAgentUtilityOptions()
+    {
+        var agentService = _services.GetRequiredService<IAgentService>();
+        return await agentService.GetAgentUtilityOptions();
+    }
+ 
+    [HttpGet("/agent/labels")]
+    public async Task<IEnumerable<string>> GetAgentLabels([FromQuery] int? size = null)
+    {
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var agents = await agentService.GetAgents(new AgentFilter
+        {
+            Pager = new Pagination { Size = size ?? 1000 }
+        });
+
+        var labels = agents.Items?.SelectMany(x => x.Labels)
+                                  .Distinct()
+                                  .OrderBy(x => x)
+                                  .ToList() ?? [];
+        return labels;
+    }
+}

@@ -21,7 +21,6 @@ public class SecondaryStagePlanFn : IFunctionCallback
     public async Task<bool> Execute(RoleDialogModel message)
     {
         var agentService = _services.GetRequiredService<IAgentService>();
-        var knowledgeService = _services.GetRequiredService<IKnowledgeService>();
         var knowledgeSettings = _services.GetRequiredService<KnowledgeBaseSettings>();
         var states = _services.GetRequiredService<IConversationStateService>();
 
@@ -56,7 +55,6 @@ public class SecondaryStagePlanFn : IFunctionCallback
             Id = PlannerAgentId.TwoStagePlanner,
             Name = Name,
             Instruction = prompt,
-            TemplateDict = new Dictionary<string, object>(),
             LlmConfig = currentAgent.LlmConfig
         };
 
@@ -93,7 +91,7 @@ public class SecondaryStagePlanFn : IFunctionCallback
     private async Task<RoleDialogModel> GetAiResponse(Agent plannerAgent)
     {
         var conv = _services.GetRequiredService<IConversationService>();
-        var wholeDialogs = conv.GetDialogHistory();
+        var wholeDialogs = await conv.GetDialogHistory();
 
         wholeDialogs.Last().Content += "\r\nOutput in JSON format.";
 

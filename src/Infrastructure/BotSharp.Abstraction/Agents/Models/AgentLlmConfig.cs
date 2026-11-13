@@ -2,6 +2,17 @@ namespace BotSharp.Abstraction.Agents.Models;
 
 public class AgentLlmConfig
 {
+    public AgentLlmConfig() { }
+
+    public AgentLlmConfig(AgentTemplateLlmConfig templateLlmConfig)
+    {
+        Provider = templateLlmConfig?.Provider;
+        Model = templateLlmConfig?.Model;
+        MaxOutputTokens = templateLlmConfig?.MaxOutputTokens;
+        ReasoningEffortLevel = templateLlmConfig?.ReasoningEffortLevel;
+        ResponseFormat = templateLlmConfig?.ResponseFormat;
+    }
+
     /// <summary>
     /// Is inherited from default Agent Settings
     /// </summary>
@@ -41,4 +52,58 @@ public class AgentLlmConfig
     [JsonPropertyName("reasoning_effort_level")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ReasoningEffortLevel { get; set; }
+
+    /// <summary>
+    /// Response format: json, xml, markdown, yaml, etc.
+    /// </summary>
+    [JsonPropertyName("response_format")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResponseFormat { get; set; }
+
+    /// <summary>
+    /// Image composition config
+    /// </summary>
+    [JsonPropertyName("image_composition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LlmImageCompositionConfig? ImageComposition { get; set; }
+
+    /// <summary>
+    /// Audio transcription config
+    /// </summary>
+    [JsonPropertyName("audio_transcription")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LlmAudioTranscriptionConfig? AudioTranscription { get; set; }
+
+    /// <summary>
+    /// Realtime config
+    /// </summary>
+    [JsonPropertyName("realtime")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LlmRealtimeConfig? Realtime { get; set; }
+
+    /// <summary>
+    /// Live config, kept apart from <see cref="Realtime"/> because the two are different kinds
+    /// of voice session: a live model runs the conversation itself and delegates the thinking to
+    /// a backend model, so its provider and model are not interchangeable with a realtime one.
+    /// Setting this is what makes a conversation a live session.
+    /// </summary>
+    [JsonPropertyName("live")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LlmLiveConfig? Live { get; set; }
+}
+
+public class LlmImageCompositionConfig : LlmProviderModel
+{
+}
+
+public class LlmAudioTranscriptionConfig : LlmProviderModel
+{
+}
+
+public class LlmRealtimeConfig : LlmConfigBase
+{
+}
+
+public class LlmLiveConfig : LlmConfigBase
+{
 }

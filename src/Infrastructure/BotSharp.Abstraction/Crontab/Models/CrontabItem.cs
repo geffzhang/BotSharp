@@ -29,8 +29,21 @@ public class CrontabItem : ScheduleTaskArgs
     [JsonPropertyName("created_time")]
     public DateTime CreatedTime { get; set; } = DateTime.UtcNow;
 
+    [JsonPropertyName("trigger_type")]
+    public CronTabItemTriggerType TriggerType { get; set; } = CronTabItemTriggerType.BackgroundWatcher;
+
+    [JsonPropertyName("reentry_protection")]
+    public bool ReentryProtection { get; set; }
+
     public override string ToString()
     {
         return $"{Title}: {Description} [AgentId: {AgentId}, UserId: {UserId}]";
     }
+}
+
+public enum CronTabItemTriggerType
+{
+    BackgroundWatcher,
+    OpenAPI,
+    MessageQueue
 }

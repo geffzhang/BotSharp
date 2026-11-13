@@ -9,6 +9,7 @@ public class ReadPdfFn : IFunctionCallback
 
     private readonly IServiceProvider _services;
     private readonly ILogger<ReadPdfFn> _logger;
+    private readonly FileHandlerSettings _settings;
 
     private readonly IEnumerable<string> _pdfContentTypes = new List<string>
     {
@@ -17,41 +18,39 @@ public class ReadPdfFn : IFunctionCallback
 
     public ReadPdfFn(
         IServiceProvider services,
-        ILogger<ReadPdfFn> logger)
+        ILogger<ReadPdfFn> logger,
+        FileHandlerSettings settings)
     {
         _services = services;
         _logger = logger;
+        _settings = settings;
     }
 
     public async Task<bool> Execute(RoleDialogModel message)
     {
         var args = JsonSerializer.Deserialize<LlmContextIn>(message.FunctionArgs);
+        var agentService = _services.GetRequiredService<IAgentService>();
         var conv = _services.GetRequiredService<IConversationService>();
         var routingCtx = _services.GetRequiredService<IRoutingContext>();
-        var agentService = _services.GetRequiredService<IAgentService>();
-
-        Agent? fromAgent = null;
-        if (!string.IsNullOrEmpty(message.CurrentAgentId))
-        {
-            fromAgent = await agentService.LoadAgent(message.CurrentAgentId);
-        }
-
+        
+        var fromAgent = await agentService.GetAgent(message.CurrentAgentId);
         var agent = new Agent
         {
-            Id = BuiltInAgentId.UtilityAssistant,
-            Name = "Utility Agent",
+            Id = fromAgent?.Id ?? BuiltInAgentId.FileAssistant,
+            Name = fromAgent?.Name ?? "File Assistant",
             Instruction = fromAgent?.Instruction ?? args?.UserRequest ?? "Please describe the pdf file(s).",
-            TemplateDict = new Dictionary<string, object>()
+            LlmConfig = fromAgent?.LlmConfig ?? new()
         };
 
         var wholeDialogs = routingCtx.GetDialogs();
         if (wholeDialogs.IsNullOrEmpty())
         {
-            wholeDialogs = conv.GetDialogHistory();
+            wholeDialogs = await conv.GetDialogHistory();
         }
 
         var dialogs = await AssembleFiles(conv.ConversationId, wholeDialogs);
         var response = await GetChatCompletion(agent, dialogs);
+        dialogs.ForEach(x => x.Files = null);
         message.Content = response;
         return true;
     }
@@ -65,20 +64,53 @@ public class ReadPdfFn : IFunctionCallback
 
         var fileStorage = _services.GetRequiredService<IFileStorageService>();
         var messageIds = dialogs.Select(x => x.MessageId).Distinct().ToList();
-        var screenshots = await fileStorage.GetMessageFileScreenshotsAsync(conversationId, messageIds);
 
-        if (screenshots.IsNullOrEmpty()) return dialogs;
+        IEnumerable<MessageFileModel> files;
+        if (_settings.Pdf?.Reading?.ConvertToImage == true)
+        {
+            files = await fileStorage.GetMessageFileScreenshotsAsync(conversationId, messageIds, options: new()
+            {
+                Sources = [FileSource.User],
+                ImageConvertProvider = _settings.Pdf?.Reading?.ImageConverter?.Provider
+            });
+        }
+        else
+        {
+            files = fileStorage.GetMessageFiles(conversationId, messageIds, options: new()
+            {
+                Sources = [FileSource.User],
+                ContentTypes = _pdfContentTypes
+            });
+        }
+
+
+        if (files.IsNullOrEmpty())
+        {
+            return dialogs;
+        }
 
         foreach (var dialog in dialogs)
         {
-            var found = screenshots.Where(x => x.MessageId == dialog.MessageId).ToList();
+            var found = files.Where(x => x.MessageId == dialog.MessageId).ToList();
             if (found.IsNullOrEmpty()) continue;
 
-            dialog.Files = found.Select(x => new BotSharpFile
+            var targets = found;
+            if (dialog.IsFromUser)
+            {
+                targets = found.Where(x => x.FileSource.IsEqualTo(FileSource.User)).ToList();
+            }
+            else if (dialog.IsFromAssistant)
+            {
+                targets = found.Where(x => x.FileSource.IsEqualTo(FileSource.Bot)).ToList();
+            }
+
+            dialog.Files = targets.Select(x => new BotSharpFile
             {
                 ContentType = x.ContentType,
                 FileUrl = x.FileUrl,
-                FileStorageUrl = x.FileStorageUrl
+                FileStorageUrl = x.FileStorageUrl,
+                FileName = x.FileName,
+                FileExtension = x.FileExtension
             }).ToList();
         }
 
@@ -89,8 +121,8 @@ public class ReadPdfFn : IFunctionCallback
     {
         try
         {
-            var provider = "openai";
-            var model = "gpt-5-mini";
+            var (provider, model) = GetLlmProviderModel();
+            SetImageDetailLevel();
             var completion = CompletionProvider.GetChatCompletion(_services, provider: provider, model: model);
             var response = await completion.GetChatCompletions(agent, dialogs);
             return response.Content;
@@ -100,6 +132,41 @@ public class ReadPdfFn : IFunctionCallback
             var error = $"Error when analyzing pdf file(s).";
             _logger.LogWarning(ex, $"{error}");
             return error;
+        }
+    }
+
+    private (string, string) GetLlmProviderModel()
+    {
+        var provider = _settings?.Pdf?.Reading?.Provider;
+        var model = _settings?.Pdf?.Reading?.Model;
+
+        if (!string.IsNullOrEmpty(provider) && !string.IsNullOrEmpty(model))
+        {
+            return (provider, model);
+        }
+
+        provider = "google-ai";
+        model = "gemini-3.8-flash";
+
+        return (provider, model);
+    }
+
+    private void SetImageDetailLevel()
+    {
+        if (_settings.Pdf?.Reading?.ConvertToImage != true)
+        {
+            return;
+        }
+
+        var state = _services.GetRequiredService<IConversationStateService>();
+        var fileSettings = _services.GetRequiredService<FileHandlerSettings>();
+
+        var key = "chat_image_detail_level";
+        var level = state.GetState(key);
+
+        if (string.IsNullOrWhiteSpace(level) && !string.IsNullOrWhiteSpace(fileSettings.Pdf?.Reading?.ImageDetailLevel))
+        {
+            state.SetState(key, fileSettings.Pdf.Reading.ImageDetailLevel);
         }
     }
 }

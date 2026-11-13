@@ -23,6 +23,9 @@ public class RoutingRule
 
     public bool Required { get; set; }
 
+    [JsonPropertyName("allow_llm_fill")]
+    public bool AllowLlmFill { get; set; } = true;
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RedirectTo { get; set; }
 
@@ -37,6 +40,22 @@ public class RoutingRule
 
     public RoutingRule()
     {
-        
     }
+
+    /// <summary>
+    /// Returns a defensive copy so hook mutations do not affect cached/shared instances.
+    /// </summary>
+    public RoutingRule Clone() => new RoutingRule
+    {
+        AgentId = AgentId,
+        AgentName = AgentName,
+        Type = Type,
+        Field = Field,
+        Description = Description,
+        FieldType = FieldType,
+        Required = Required,
+        AllowLlmFill = AllowLlmFill,
+        RedirectTo = RedirectTo,
+        RedirectToAgentName = RedirectToAgentName
+    };
 }

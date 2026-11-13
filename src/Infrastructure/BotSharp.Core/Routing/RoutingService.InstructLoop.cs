@@ -21,27 +21,11 @@ public partial class RoutingService
 
         var reasoner = GetReasoner(_router);
 
-        _context.Push(_router.Id);
-
-        // Handle multi-language for input
-        var agentSettings = _services.GetRequiredService<AgentSettings>();
-        if (agentSettings.EnableTranslator)
-        {
-            var translator = _services.GetRequiredService<ITranslationService>();
-
-            var language = states.GetState(StateConst.LANGUAGE, LanguageType.ENGLISH);
-            if (language != LanguageType.ENGLISH)
-            {
-                message.SecondaryContent = message.Content;
-                message.Content = await translator.Translate(_router, message.MessageId, message.Content,
-                    language: LanguageType.ENGLISH,
-                    clone: false);
-            }
-        }
+        await _context.Push(_router.Id);
 
         dialogs.Add(message);
         Context.SetDialogs(dialogs);
-        storage.Append(convService.ConversationId, message);
+        await storage.Append(convService.ConversationId, message);
 
         // Get first instruction
         _router.TemplateDict["conversation"] = await GetConversationContent(dialogs);

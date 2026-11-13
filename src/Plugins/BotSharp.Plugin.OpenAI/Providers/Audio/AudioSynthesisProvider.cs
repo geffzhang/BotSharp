@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using OpenAI.Audio;
 
 namespace BotSharp.Plugin.OpenAI.Providers.Audio;
@@ -20,9 +21,20 @@ public class AudioSynthesisProvider : IAudioSynthesis
         _model = model;
     }
 
+    // A short phrase normally comes back in a few seconds, but some requests never finish;
+    // with the SDK default of 100s per attempt, four stalled attempts block the caller for ~7 minutes.
+    private const int DefaultTimeoutSeconds = 30;
+    private const int DefaultMaxRetries = 3;
+
     public async Task<BinaryData> GenerateAudioAsync(string text, string? voice = "alloy", string? format = "mp3", string? instructions = null)
     {
-        var audioClient = ProviderHelper.GetClient(Provider, _model, _services)
+        var settingsService = _services.GetRequiredService<ILlmProviderService>();
+        var synthesis = settingsService.GetSetting(Provider, _model)?.Audio?.Synthesis;
+        var timeout = TimeSpan.FromSeconds(synthesis?.TimeoutSeconds ?? DefaultTimeoutSeconds);
+        var maxRetries = synthesis?.MaxRetries ?? DefaultMaxRetries;
+
+        var audioClient = ProviderHelper.GetClient(Provider, _model, apiKey: null, _services,
+                                            networkTimeout: timeout, maxRetries: maxRetries)
                                         .GetAudioClient(_model);
 
         var (speechVoice, options) = PrepareGenerationOptions(voice: voice, format: format);
@@ -35,12 +47,12 @@ public class AudioSynthesisProvider : IAudioSynthesis
         var state = _services.GetRequiredService<IConversationStateService>();
         var speechVoice = GetVoice(voice ?? "alloy");
         var responseFormat = GetSpeechFormat(format ?? "mp3");
-        var speed = GetSpeed(state.GetState("speech_generate_speed"));
+        var speed = state.GetState<float?>(AudioStateConst.SPEECH_GENERATE_SPEED);
 
         var options = new SpeechGenerationOptions
         {
             ResponseFormat = responseFormat,
-            SpeedRatio = speed,
+            SpeedRatio = speed
         };
 
         return (voice, options);
@@ -102,15 +114,5 @@ public class AudioSynthesisProvider : IAudioSynthesis
         }
 
         return format;
-    }
-
-    private float? GetSpeed(string input)
-    {
-        if (!float.TryParse(input, out var speed))
-        {
-            return null;
-        }
-
-        return speed;
     }
 }

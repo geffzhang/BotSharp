@@ -2,7 +2,7 @@ using BotSharp.Abstraction.Files;
 using BotSharp.Abstraction.Routing;
 using BotSharp.Core.Infrastructures;
 using BotSharp.Plugin.Twilio.OutboundPhoneCallHandler.LlmContexts;
-using Twilio.Rest.Api.V2010.Account;
+using BotSharp.Plugin.Twilio.Services;
 
 namespace BotSharp.Plugin.Twilio.OutboundPhoneCallHandler.Functions;
 
@@ -28,7 +28,6 @@ public class HangupPhoneCallFn : IFunctionCallback
     {
         var args = JsonSerializer.Deserialize<HangupPhoneCallArgs>(message.FunctionArgs);
 
-        var fileStorage = _services.GetRequiredService<IFileStorageService>();
         var convService = _services.GetRequiredService<IConversationService>();
         var conversationId = convService.ConversationId;
         var states = _services.GetRequiredService<IConversationStateService>();
@@ -42,23 +41,19 @@ public class HangupPhoneCallFn : IFunctionCallback
         }
 
         var processUrl = $"{_twilioSetting.CallbackHost}/twilio/voice/hang-up?agent-id={message.CurrentAgentId}&conversation-id={conversationId}";
+        var twilio = _services.GetRequiredService<TwilioService>();
 
         // Generate initial assistant audio
-        string initAudioFile = null;
         if (!string.IsNullOrEmpty(args.ResponseContent) && _twilioSetting.GenerateEndingAudio)
         {
-            var completion = CompletionProvider.GetAudioSynthesizer(_services);
-            var data = await completion.GenerateAudioAsync(args.ResponseContent);
-            initAudioFile = "ending.mp3";
-            fileStorage.SaveSpeechFile(conversationId, initAudioFile, data);
+            var initAudioFile = await twilio.SaveSpeechAsync(conversationId, "ending", args.ResponseContent,
+                preferAudio: twilio.IsRealtimeCall());
 
             processUrl += $"&init-audio-file={initAudioFile}";
         }
 
-        var call = CallResource.Update(
-            url: new Uri(processUrl),
-            pathSid: callSid
-        );
+        // A call that already ended is what hanging up wants, so it still counts as hung up
+        await twilio.TryRedirectCallAsync(callSid, processUrl);
 
         message.Content = args.Reason;
         message.StopCompletion = true;

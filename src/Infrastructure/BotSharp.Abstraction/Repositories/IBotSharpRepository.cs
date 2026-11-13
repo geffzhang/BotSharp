@@ -1,6 +1,10 @@
+using BotSharp.Abstraction.Agents.Options;
+using BotSharp.Abstraction.Knowledges.Filters;
 using BotSharp.Abstraction.Loggers.Models;
 using BotSharp.Abstraction.Plugins.Models;
 using BotSharp.Abstraction.Repositories.Filters;
+using BotSharp.Abstraction.Repositories.Models;
+using BotSharp.Abstraction.Repositories.Options;
 using BotSharp.Abstraction.Roles.Models;
 using BotSharp.Abstraction.Shared;
 using BotSharp.Abstraction.Statistics.Enums;
@@ -9,6 +13,7 @@ using BotSharp.Abstraction.Tasks.Models;
 using BotSharp.Abstraction.Translation.Models;
 using BotSharp.Abstraction.Users.Enums;
 using BotSharp.Abstraction.Users.Models;
+using BotSharp.Abstraction.VectorStorage.Filters;
 using BotSharp.Abstraction.VectorStorage.Models;
 
 namespace BotSharp.Abstraction.Repositories;
@@ -16,188 +21,214 @@ namespace BotSharp.Abstraction.Repositories;
 public interface IBotSharpRepository : IHaveServiceProvider
 {
     #region Plugin
-    PluginConfig GetPluginConfig()
+    Task<PluginConfig> GetPluginConfig()
         => throw new NotImplementedException();
-    void SavePluginConfig(PluginConfig config)
+    Task SavePluginConfig(PluginConfig config)
         => throw new NotImplementedException();
     #endregion
 
     #region Role
-    bool RefreshRoles(IEnumerable<Role> roles)
+    Task<bool> RefreshRoles(IEnumerable<Role> roles)
         => throw new NotImplementedException();
-    IEnumerable<Role> GetRoles(RoleFilter filter)
+    Task<IEnumerable<Role>> GetRoles(RoleFilter filter)
         => throw new NotImplementedException();
-    Role? GetRoleDetails(string roleId, bool includeAgent = false)
+    Task<Role?> GetRoleDetails(string roleId, bool includeAgent = false)
         => throw new NotImplementedException();
-    bool UpdateRole(Role role, bool updateRoleAgents = false)
+    Task<bool> UpdateRole(Role role, bool updateRoleAgents = false)
         => throw new NotImplementedException();
     #endregion
 
     #region User
-    User? GetUserByEmail(string email) => throw new NotImplementedException();
-    User? GetUserByPhone(string phone, string type = UserType.Client, string regionCode = "CN") => throw new NotImplementedException();
-    User? GetUserByPhoneV2(string phone, string source = UserType.Internal, string regionCode = "CN") => throw new NotImplementedException();
-    User? GetAffiliateUserByPhone(string phone) => throw new NotImplementedException();
-    User? GetUserById(string id) => throw new NotImplementedException();
-    List<User> GetUserByIds(List<string> ids) => throw new NotImplementedException();
-    List<User> GetUsersByAffiliateId(string affiliateId) => throw new NotImplementedException();
-    User? GetUserByUserName(string userName) => throw new NotImplementedException();
-    void UpdateUserName(string userId, string userName) => throw new NotImplementedException();
-    Dashboard? GetDashboard(string id = null) => throw new NotImplementedException();
-    void CreateUser(User user) => throw new NotImplementedException();
-    void UpdateExistUser(string userId, User user) => throw new NotImplementedException();
-    void UpdateUserVerified(string userId) => throw new NotImplementedException();
-    void AddDashboardConversation(string userId, string conversationId) => throw new NotImplementedException();
-    void RemoveDashboardConversation(string userId, string conversationId) => throw new NotImplementedException();
-    void UpdateDashboardConversation(string userId, DashboardConversation dashConv) => throw new NotImplementedException();
-    void UpdateUserVerificationCode(string userId, string verficationCode) => throw new NotImplementedException();
-    void UpdateUserPassword(string userId, string password) => throw new NotImplementedException();
-    void UpdateUserEmail(string userId, string email) => throw new NotImplementedException();
-    void UpdateUserPhone(string userId, string Iphone, string regionCode) => throw new NotImplementedException();
-    void UpdateUserIsDisable(string userId, bool isDisable) => throw new NotImplementedException();
-    void UpdateUsersIsDisable(List<string> userIds, bool isDisable) => throw new NotImplementedException();
-    ValueTask<PagedItems<User>> GetUsers(UserFilter filter) => throw new NotImplementedException();
-    List<User> SearchLoginUsers(User filter, string source = UserSource.Internal) =>throw new NotImplementedException();
-    User? GetUserDetails(string userId, bool includeAgent = false) => throw new NotImplementedException();
-    bool UpdateUser(User user, bool updateUserAgents = false) => throw new NotImplementedException();
+    Task<User?> GetUserByEmail(string email) => throw new NotImplementedException();
+    Task<User?> GetUserByPhone(string phone, string type = UserType.Client, string regionCode = "CN") => throw new NotImplementedException();
+    Task<User?> GetUserByPhoneV2(string phone, string source = UserType.Internal, string regionCode = "CN") => throw new NotImplementedException();
+    Task<User?> GetAffiliateUserByPhone(string phone) => throw new NotImplementedException();
+    Task<User?> GetUserById(string id) => throw new NotImplementedException();
+    Task<List<User>> GetUserByIds(List<string> ids) => throw new NotImplementedException();
+    Task<List<User>> GetUsersByAffiliateId(string affiliateId) => throw new NotImplementedException();
+    Task<User?> GetUserByUserName(string userName) => throw new NotImplementedException();
+    Task UpdateUserName(string userId, string userName) => throw new NotImplementedException();
+    Task<Dashboard?> GetDashboard(string id = null) => throw new NotImplementedException();
+    Task CreateUser(User user) => throw new NotImplementedException();
+    Task UpdateExistUser(string userId, User user) => throw new NotImplementedException();
+    Task UpdateUserVerified(string userId) => throw new NotImplementedException();
+    Task AddDashboardConversation(string userId, string conversationId) => throw new NotImplementedException();
+    Task RemoveDashboardConversation(string userId, string conversationId) => throw new NotImplementedException();
+    Task UpdateDashboardConversation(string userId, DashboardConversation dashConv) => throw new NotImplementedException();
+    Task UpdateUserVerificationCode(string userId, string verficationCode) => throw new NotImplementedException();
+    Task UpdateUserPassword(string userId, string password) => throw new NotImplementedException();
+    Task UpdateUserEmail(string userId, string email) => throw new NotImplementedException();
+    Task UpdateUserPhone(string userId, string Iphone, string regionCode) => throw new NotImplementedException();
+    Task UpdateUserIsDisable(string userId, bool isDisable) => throw new NotImplementedException();
+    Task UpdateUsersIsDisable(List<string> userIds, bool isDisable) => throw new NotImplementedException();
+    Task<PagedItems<User>> GetUsers(UserFilter filter) => throw new NotImplementedException();
+    Task<List<User>> SearchLoginUsers(User filter, string source = UserSource.Internal) =>throw new NotImplementedException();
+    Task<User?> GetUserDetails(string userId, bool includeAgent = false) => throw new NotImplementedException();
+    Task<bool> UpdateUser(User user, bool updateUserAgents = false) => throw new NotImplementedException();
     #endregion
 
     #region Agent
-    void UpdateAgent(Agent agent, AgentField field)
+    Task UpdateAgent(Agent agent, AgentField field)
         => throw new NotImplementedException();
-    Agent? GetAgent(string agentId, bool basicsOnly = false)
+    Task<Agent?> GetAgent(string agentId, bool basicsOnly = false)
         => throw new NotImplementedException();
-    List<Agent> GetAgents(AgentFilter filter)
+    Task<List<Agent>> GetAgents(AgentFilter filter)
         => throw new NotImplementedException();
-    List<UserAgent> GetUserAgents(string userId)
+    Task<List<UserAgent>> GetUserAgents(string userId)
         => throw new NotImplementedException();
-    void BulkInsertAgents(List<Agent> agents)
+    Task BulkInsertAgents(List<Agent> agents)
         => throw new NotImplementedException();
-    void BulkInsertUserAgents(List<UserAgent> userAgents)
+    Task BulkInsertUserAgents(List<UserAgent> userAgents)
         => throw new NotImplementedException();
-    bool DeleteAgents()
+    Task<bool> DeleteAgents()
         => throw new NotImplementedException();
-    bool DeleteAgent(string agentId)
+    Task<bool> DeleteAgent(string agentId, AgentDeleteOptions? options = null)
         => throw new NotImplementedException();
-    List<string> GetAgentResponses(string agentId, string prefix, string intent)
+    Task<List<string>> GetAgentResponses(string agentId, string prefix, string intent)
         => throw new NotImplementedException();
-    string GetAgentTemplate(string agentId, string templateName)
+    Task<string> GetAgentTemplate(string agentId, string templateName)
         => throw new NotImplementedException();
-    bool PatchAgentTemplate(string agentId, AgentTemplate template)
+    Task<AgentTemplate?> GetAgentTemplateDetail(string agentId, string templateName)
         => throw new NotImplementedException();
-
-    bool UpdateAgentLabels(string agentId, List<string> labels)
+    Task<bool> PatchAgentTemplate(string agentId, AgentTemplate template)
         => throw new NotImplementedException();
-    bool AppendAgentLabels(string agentId, List<string> labels)
+    Task<bool> UpdateAgentLabels(string agentId, List<string> labels)
+        => throw new NotImplementedException();
+    Task<bool> AppendAgentLabels(string agentId, List<string> labels)
         => throw new NotImplementedException();
     #endregion
 
     #region Agent Task
-    ValueTask<PagedItems<AgentTask>> GetAgentTasks(AgentTaskFilter filter)
+    Task<PagedItems<AgentTask>> GetAgentTasks(AgentTaskFilter filter)
         => throw new NotImplementedException();
-    AgentTask? GetAgentTask(string agentId, string taskId)
+    Task<AgentTask?> GetAgentTask(string agentId, string taskId)
         => throw new NotImplementedException();
-    void InsertAgentTask(AgentTask task)
+    Task InsertAgentTask(AgentTask task)
         => throw new NotImplementedException();
-    void BulkInsertAgentTasks(List<AgentTask> tasks)
+    Task BulkInsertAgentTasks(string agentId, List<AgentTask> tasks)
         => throw new NotImplementedException();
-    void UpdateAgentTask(AgentTask task, AgentTaskField field)
+    Task UpdateAgentTask(AgentTask task, AgentTaskField field)
         => throw new NotImplementedException();
-    bool DeleteAgentTask(string agentId, List<string> taskIds)
+    Task<bool> DeleteAgentTasks(string agentId, List<string>? taskIds = null)
         => throw new NotImplementedException();
-    bool DeleteAgentTasks()
+    #endregion
+
+    #region Agent Code
+    Task<List<AgentCodeScript>> GetAgentCodeScripts(string agentId, AgentCodeScriptFilter? filter = null)
+        => throw new NotImplementedException();
+    Task<AgentCodeScript?> GetAgentCodeScript(string agentId, string scriptName, string scriptType = AgentCodeScriptType.Src)
+        => throw new NotImplementedException();
+    Task<bool> UpdateAgentCodeScripts(string agentId, List<AgentCodeScript> scripts, AgentCodeScriptDbUpdateOptions? options = null)
+        => throw new NotImplementedException();
+    Task<bool> BulkInsertAgentCodeScripts(string agentId, List<AgentCodeScript> scripts)
+        => throw new NotImplementedException();
+    Task<bool> DeleteAgentCodeScripts(string agentId, List<AgentCodeScript>? scripts = null)
         => throw new NotImplementedException();
     #endregion
 
     #region Conversation
-    void CreateNewConversation(Conversation conversation)
+    Task CreateNewConversation(Conversation conversation)
         => throw new NotImplementedException();
-    bool DeleteConversations(IEnumerable<string> conversationIds)
+    Task<bool> DeleteConversations(IEnumerable<string> conversationIds)
         => throw new NotImplementedException();
-    List<DialogElement> GetConversationDialogs(string conversationId)
+    Task<List<DialogElement>> GetConversationDialogs(string conversationId, ConversationDialogFilter? filter = null)
         => throw new NotImplementedException();
-    void AppendConversationDialogs(string conversationId, List<DialogElement> dialogs)
+    Task AppendConversationDialogs(string conversationId, List<DialogElement> dialogs)
         => throw new NotImplementedException();
-    ConversationState GetConversationStates(string conversationId)
+    Task<ConversationState> GetConversationStates(string conversationId)
         => throw new NotImplementedException();
-    void UpdateConversationStates(string conversationId, List<StateKeyValue> states)
+    Task UpdateConversationStates(string conversationId, List<StateKeyValue> states)
         => throw new NotImplementedException();
-    void UpdateConversationStatus(string conversationId, string status)
+    Task UpdateConversationStatus(string conversationId, string status)
         => throw new NotImplementedException();
-    Conversation GetConversation(string conversationId, bool isLoadStates = false)
+    Task<Conversation> GetConversation(string conversationId, bool isLoadStates = false)
         => throw new NotImplementedException();
-    ValueTask<PagedItems<Conversation>> GetConversations(ConversationFilter filter)
+    Task<PagedItems<Conversation>> GetConversations(ConversationFilter filter)
         => throw new NotImplementedException();
-    void UpdateConversationTitle(string conversationId, string title)
+    Task UpdateConversationTitle(string conversationId, string title)
         => throw new NotImplementedException();
-    void UpdateConversationTitleAlias(string conversationId, string titleAlias)
+    Task UpdateConversationTitleAlias(string conversationId, string titleAlias)
         => throw new NotImplementedException();
-    bool UpdateConversationTags(string conversationId, List<string> toAddTags, List<string> toDeleteTags)
+    Task<bool> UpdateConversationTags(string conversationId, List<string> toAddTags, List<string> toDeleteTags)
         => throw new NotImplementedException();
-    bool AppendConversationTags(string conversationId, List<string> tags)
+    Task<bool> AppendConversationTags(string conversationId, List<string> tags)
         => throw new NotImplementedException();
-    bool UpdateConversationMessage(string conversationId, UpdateMessageRequest request)
+    Task<bool> UpdateConversationMessage(string conversationId, UpdateMessageRequest request)
         => throw new NotImplementedException();
-    void UpdateConversationBreakpoint(string conversationId, ConversationBreakpoint breakpoint)
+    Task UpdateConversationBreakpoint(string conversationId, ConversationBreakpoint breakpoint)
         => throw new NotImplementedException();
-    ConversationBreakpoint? GetConversationBreakpoint(string conversationId)
+    Task<ConversationBreakpoint?> GetConversationBreakpoint(string conversationId)
         => throw new NotImplementedException();
-    List<Conversation> GetLastConversations()
+    Task<List<Conversation>> GetLastConversations()
         => throw new NotImplementedException();
-    List<string> GetIdleConversations(int batchSize, int messageLimit, int bufferHours, IEnumerable<string> excludeAgentIds)
+    Task<List<string>> GetIdleConversations(int batchSize, int messageLimit, int bufferHours, IEnumerable<string> excludeAgentIds)
          => throw new NotImplementedException();
-    List<string> TruncateConversation(string conversationId, string messageId, bool cleanLog = false)
+    Task<List<string>> TruncateConversation(string conversationId, string messageId, bool cleanLog = false)
          => throw new NotImplementedException();
-    List<string> GetConversationStateSearchKeys(ConversationStateKeysFilter filter)
+    Task<List<string>> GetConversationStateSearchKeys(ConversationStateKeysFilter filter)
          => throw new NotImplementedException();
-    List<string> GetConversationsToMigrate(int batchSize = 100)
+    Task<List<string>> GetConversationsToMigrate(int batchSize = 100)
         => throw new NotImplementedException();
-    bool MigrateConvsersationLatestStates(string conversationId)
+    Task<bool> MigrateConvsersationLatestStates(string conversationId)
          => throw new NotImplementedException();
+    Task<List<ConversationFile>> GetConversationFiles(ConversationFileFilter filter)
+        => throw new NotImplementedException();
+    Task<bool> SaveConversationFiles(List<ConversationFile> files)
+        => throw new NotImplementedException();
+    Task<bool> DeleteConversationFiles(List<string> conversationIds)
+        => throw new NotImplementedException();
     #endregion
 
     #region LLM Completion Log
-    void SaveLlmCompletionLog(LlmCompletionLog log)
+    Task SaveLlmCompletionLog(LlmCompletionLog log)
         => throw new NotImplementedException();
     #endregion
 
     #region Conversation Content Log
-    void SaveConversationContentLog(ContentLogOutputModel log)
+    Task SaveConversationContentLog(ContentLogOutputModel log)
         => throw new NotImplementedException();
-    DateTimePagination<ContentLogOutputModel> GetConversationContentLogs(string conversationId, ConversationLogFilter filter)
+    Task<DateTimePagination<ContentLogOutputModel>> GetConversationContentLogs(string conversationId, ConversationLogFilter filter)
         => throw new NotImplementedException();
     #endregion
 
     #region Conversation State Log
-    void SaveConversationStateLog(ConversationStateLogModel log)
+    Task SaveConversationStateLog(ConversationStateLogModel log)
         => throw new NotImplementedException();
-    DateTimePagination<ConversationStateLogModel> GetConversationStateLogs(string conversationId, ConversationLogFilter filter)
+    Task<DateTimePagination<ConversationStateLogModel>> GetConversationStateLogs(string conversationId, ConversationLogFilter filter)
+        => throw new NotImplementedException();
+    #endregion
+
+    #region Log Cleanup
+    Task<int> DeleteOldConversationLogs(int retentionDays, int batchSize)
         => throw new NotImplementedException();
     #endregion
 
     #region Instruction Log
-    bool SaveInstructionLogs(IEnumerable<InstructionLogModel> logs)
+    Task<bool> SaveInstructionLogs(IEnumerable<InstructionLogModel> logs)
         => throw new NotImplementedException();
 
-    ValueTask<PagedItems<InstructionLogModel>> GetInstructionLogs(InstructLogFilter filter)
+    Task<PagedItems<InstructionLogModel>> GetInstructionLogs(InstructLogFilter filter)
         => throw new NotImplementedException();
 
-    List<string> GetInstructionLogSearchKeys(InstructLogKeysFilter filter)
+    Task<List<string>> GetInstructionLogSearchKeys(InstructLogKeysFilter filter)
          => throw new NotImplementedException();
+
+    Task<bool> UpdateInstructionLogStates(UpdateInstructionLogStatesModel updateInstructionStates)
+        => throw new NotImplementedException();
     #endregion
 
     #region Statistics
-    BotSharpStats? GetGlobalStats(string agentId, DateTime recordTime, StatsInterval interval)
+    Task<BotSharpStats?> GetGlobalStats(string agentId, DateTime recordTime, StatsInterval interval)
         => throw new NotImplementedException();
-    bool SaveGlobalStats(BotSharpStatsDelta delta)
+    Task<bool> SaveGlobalStats(BotSharpStatsDelta delta)
         => throw new NotImplementedException();
 
     #endregion
 
     #region Translation
-    IEnumerable<TranslationMemoryOutput> GetTranslationMemories(IEnumerable<TranslationMemoryQuery> queries)
+    Task<IEnumerable<TranslationMemoryOutput>> GetTranslationMemories(IEnumerable<TranslationMemoryQuery> queries)
          => throw new NotImplementedException();
-    bool SaveTranslationMemories(IEnumerable<TranslationMemoryInput> inputs)
+    Task<bool> SaveTranslationMemories(IEnumerable<TranslationMemoryInput> inputs)
          => throw new NotImplementedException();
 
     #endregion
@@ -209,34 +240,29 @@ public interface IBotSharpRepository : IHaveServiceProvider
     /// <param name="configs"></param>
     /// <param name="reset"></param>
     /// <returns></returns>
-    bool AddKnowledgeCollectionConfigs(List<VectorCollectionConfig> configs, bool reset = false)
+    Task<bool> AddKnowledgeCollectionConfigs(List<VectorCollectionConfig> configs, bool reset = false)
          => throw new NotImplementedException();
-    bool DeleteKnowledgeCollectionConfig(string collectionName)
+    Task<bool> DeleteKnowledgeCollectionConfig(string collectionName)
          => throw new NotImplementedException();
-    IEnumerable<VectorCollectionConfig> GetKnowledgeCollectionConfigs(VectorCollectionConfigFilter filter)
+    Task<IEnumerable<VectorCollectionConfig>> GetKnowledgeCollectionConfigs(VectorCollectionConfigFilter filter)
          => throw new NotImplementedException();
-    bool SaveKnolwedgeBaseFileMeta(KnowledgeDocMetaData metaData)
+    Task<VectorCollectionConfig> GetKnowledgeCollectionConfig(string collectionName, string knowledgebaseProvider)
+         => throw new NotImplementedException();
+    Task<bool> SaveKnolwedgeBaseFileMeta(KnowledgeFileMetaData metaData)
          => throw new NotImplementedException();
 
-    /// <summary>
-    /// Delete file meta data in a knowledge collection, given the vector store provider. If "fileId" is null, delete all in the collection.
-    /// </summary>
-    /// <param name="collectionName"></param>
-    /// <param name="vectorStoreProvider"></param>
-    /// <param name="fileId"></param>
-    /// <returns></returns>
-    bool DeleteKnolwedgeBaseFileMeta(string collectionName, string vectorStoreProvider, Guid? fileId = null)
+    Task<bool> DeleteKnolwedgeBaseFileMeta(string collectionName, string knowledgebaseProvider, Guid? fileId = null)
          => throw new NotImplementedException();
-    ValueTask<PagedItems<KnowledgeDocMetaData>> GetKnowledgeBaseFileMeta(string collectionName, string vectorStoreProvider, KnowledgeFileFilter filter)
+    Task<PagedItems<KnowledgeFileMetaData>> GetKnowledgeBaseFileMeta(string collectionName, string knowledgebaseProvider, KnowledgeFileFilter filter)
          => throw new NotImplementedException();
     #endregion
 
     #region Crontab
-    bool UpsertCrontabItem(CrontabItem cron)
+    Task<bool> UpsertCrontabItem(CrontabItem cron)
         => throw new NotImplementedException();
-    bool DeleteCrontabItem(string conversationId)
+    Task<bool> DeleteCrontabItem(string conversationId)
         => throw new NotImplementedException();
-    ValueTask<PagedItems<CrontabItem>> GetCrontabItems(CrontabItemFilter filter)
+    Task<PagedItems<CrontabItem>> GetCrontabItems(CrontabItemFilter filter)
         => throw new NotImplementedException();
     #endregion
 }

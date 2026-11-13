@@ -96,6 +96,13 @@ The main documentation for the site is organized into the following sections:
    llm/few-shot-learning
    llm/provider
 
+.. toctree::
+   :maxdepth: 2
+   :caption: MCP
+
+   mcp/parallel-search
+   mcp/sem
+
 .. _llamasharp:
 
 .. toctree::

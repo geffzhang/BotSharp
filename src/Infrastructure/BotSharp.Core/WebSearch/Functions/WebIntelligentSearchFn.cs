@@ -1,5 +1,8 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Functions;
 using BotSharp.Abstraction.MLTasks;
+using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Settings;
 
 namespace BotSharp.Core.WebSearch.Functions;
 
@@ -34,14 +37,14 @@ public class WebIntelligentSearchFn : IFunctionCallback
         var agent = new Agent
         {
             Id = fromAgent?.Id ?? BuiltInAgentId.UtilityAssistant,
-            Name = fromAgent?.Name ?? "AI Agent",
+            Name = fromAgent?.Name ?? "Utility Assistant",
             Instruction = "Please search the websites to handle user's request."
         };
 
         var dialogs = routingCtx.GetDialogs();
         if (dialogs.IsNullOrEmpty())
         {
-            dialogs = conv.GetDialogHistory();
+            dialogs = await conv.GetDialogHistory();
         }
 
         var response = await GetChatCompletion(agent, dialogs);
@@ -53,16 +56,8 @@ public class WebIntelligentSearchFn : IFunctionCallback
     {
         try
         {
-            var provider = "openai";
-            var defaultModel = "gpt-4o-mini-search-preview";
-
-            var llmProviderService = _services.GetRequiredService<ILlmProviderService>();
-            var models = llmProviderService.GetProviderModels(provider);
-            var webSearchModel = models.FirstOrDefault(x => x.WebSearch?.IsDefault == true)?.Name
-                                ?? models.FirstOrDefault(x => x.WebSearch != null)?.Name
-                                ?? defaultModel;
-
-            var completion = CompletionProvider.GetChatCompletion(_services, provider: provider, model: webSearchModel);
+            var (provider, model) = GetLlmProviderModel();
+            var completion = CompletionProvider.GetChatCompletion(_services, provider: provider, model: model);
             var response = await completion.GetChatCompletions(agent, dialogs);
             return response.Content;
         }
@@ -72,5 +67,30 @@ public class WebIntelligentSearchFn : IFunctionCallback
             _logger.LogWarning(ex, $"{error}");
             return error;
         }
+    }
+
+    private (string, string) GetLlmProviderModel()
+    {
+        var state = _services.GetRequiredService<IConversationStateService>();
+        var llmProviderService = _services.GetRequiredService<ILlmProviderService>();
+        var settingService = _services.GetRequiredService<ISettingService>();
+        
+        var provider = state.GetState(WebSearchStateConst.WEB_SEARCH_LLM_PROVIDER);
+        var model = state.GetState(WebSearchStateConst.WEB_SEARCH_LLM_MODEL);
+
+        if (!string.IsNullOrEmpty(provider) && !string.IsNullOrEmpty(model))
+        {
+            return (provider, model);
+        }
+
+        provider = "openai";
+        model = Gpt4xModelConstants.GPT_4o_Mini_Search_Preview;
+
+        var models = llmProviderService.GetProviderModels(provider);
+        var foundModel = models.FirstOrDefault(x => x.WebSearch?.IsDefault == true)
+                            ?? models.FirstOrDefault(x => x.WebSearch != null);
+
+        model = foundModel?.Name ?? model;
+        return (provider, model);
     }
 }

@@ -31,7 +31,7 @@ public class InstructExecutor : IExecutor
         }
 
         message.FunctionArgs = JsonSerializer.Serialize(inst);
-        if (message.FunctionName != null)
+        if (!string.IsNullOrEmpty(message.FunctionName))
         {
             var msg = RoleDialogModel.From(message, role: AgentRole.Function);
             await routing.InvokeFunction(message.FunctionName, msg, options: new() { From = InvokeSource.Routing });
@@ -43,6 +43,13 @@ public class InstructExecutor : IExecutor
         var agentService = _services.GetRequiredService<IAgentService>();
         var agent = await agentService.GetAgent(agentId);
         inst.AgentName = agent.Name;
+
+        await HookEmitter.Emit<IRoutingHook>(_services, async hook => await hook.OnRoutingInstructionCompleted(inst, message),
+                agent.Id);
+        if (message.StopCompletion)
+        {
+            return message;
+        }
 
         if (inst.ExecutingDirectly)
         {
@@ -59,11 +66,12 @@ public class InstructExecutor : IExecutor
         else
         {
             var state = _services.GetRequiredService<IConversationStateService>();
-            var useStreamMsg = state.GetState("use_stream_message");
+            var useStreamMsg = state.GetState<bool>(StateConst.USE_STREAM_MESSAGE);
+            var enLang = state.Equal(StateConst.LANGUAGE, LanguageType.ENGLISH);
             var options = new InvokeAgentOptions()
             {
                 From = InvokeSource.Routing,
-                UseStream = bool.TryParse(useStreamMsg, out var useStream) && useStream
+                UseStream = useStreamMsg && enLang
             };
             var ret = await routing.InvokeAgent(agentId, dialogs, options);
         }

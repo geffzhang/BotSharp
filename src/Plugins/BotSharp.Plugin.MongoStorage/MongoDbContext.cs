@@ -1,51 +1,39 @@
 using BotSharp.Abstraction.Repositories.Settings;
+using BotSharp.Abstraction.Utilities;
+using System.Threading;
 
 namespace BotSharp.Plugin.MongoStorage;
 
 public class MongoDbContext
 {
+    private const string DefaultTablePrefix = "BotSharp";
     private readonly MongoClient _mongoClient;
     private readonly string _mongoDbDatabaseName;
     private readonly string _collectionPrefix;
-
-    private const string DB_NAME_INDEX = "authSource";
+    private static int _indexesInitialized = 0;
 
     public MongoDbContext(BotSharpDatabaseSettings dbSettings)
     {
-        var mongoDbConnectionString = dbSettings.BotSharpMongoDb;
+        var mongoDbConnectionString = dbSettings?.BotSharpMongoDb;
+        if (string.IsNullOrWhiteSpace(mongoDbConnectionString))
+            throw new InvalidOperationException("MongoDB is enabled but BotSharpMongoDb is not configured.");
+
         _mongoClient = new MongoClient(mongoDbConnectionString);
         _mongoDbDatabaseName = GetDatabaseName(mongoDbConnectionString);
-        _collectionPrefix = dbSettings.TablePrefix.IfNullOrEmptyAs("BotSharp");
+        _collectionPrefix = dbSettings?.TablePrefix.IfNullOrEmptyAs(DefaultTablePrefix)!;
+        CreateIndexes();
     }
 
     private string GetDatabaseName(string mongoDbConnectionString)
     {
-        var databaseName = mongoDbConnectionString.Substring(mongoDbConnectionString.LastIndexOf("/", StringComparison.InvariantCultureIgnoreCase) + 1);
-
-        var symbol = "?";
-        if (databaseName.Contains(symbol))
+        var mongoUrl = new MongoUrl(mongoDbConnectionString);
+        var databaseName = mongoUrl.DatabaseName.IfNullOrEmptyAs(mongoUrl.AuthenticationSource);
+        if (string.IsNullOrWhiteSpace(databaseName))
         {
-            var markIdx = databaseName.IndexOf(symbol, StringComparison.InvariantCultureIgnoreCase);
-            var db = databaseName.Substring(0, markIdx);
-            if (!string.IsNullOrWhiteSpace(db))
-            {
-                return db;
-            }
-
-            var queryStr = databaseName.Substring(markIdx + 1);
-            var queries = queryStr.Split("&", StringSplitOptions.RemoveEmptyEntries).Select(x => new
-            {
-                Key = x.Split("=")[0],
-                Value = x.Split("=")[1]
-            }).ToList();
-
-            var source = queries.FirstOrDefault(x => x.Key.IsEqualTo(DB_NAME_INDEX));
-            if (source != null)
-            {
-                databaseName = source.Value;
-            }
+            throw new InvalidOperationException(
+                "MongoDB connection string must specify a database: set the database in the path (e.g. mongodb://host/dbname) or set authSource in the query string (e.g. ?authSource=dbname). ");
         }
-        return databaseName;
+        return databaseName!;
     }
 
     private IMongoDatabase Database => _mongoClient.GetDatabase(_mongoDbDatabaseName);
@@ -58,10 +46,25 @@ public class MongoDbContext
         return collections.Any();
     }
 
+    private IMongoCollection<TDocument> GetCollection<TDocument>(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException($"The collection {name} cannot be empty.");
+        }
+
+        var collectionName = $"{_collectionPrefix}_{name}";
+
+        var collection = Database.GetCollection<TDocument>(collectionName);
+        return collection;
+    }
+
     private IMongoCollection<TDocument> GetCollectionOrCreate<TDocument>(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
+        {
             throw new ArgumentException($"The collection {name} cannot be empty.");
+        }
 
         var collectionName = $"{_collectionPrefix}_{name}";
         if (!CollectionExists(Database, collectionName))
@@ -74,6 +77,48 @@ public class MongoDbContext
     }
 
     #region Indexes
+    private void CreateIndexes()
+    {
+        // Use Interlocked.CompareExchange to ensure the index is initialized only once, ensuring thread safety
+        // 0 indicates uninitialized, 1 indicates initialized
+        if (Interlocked.CompareExchange(ref _indexesInitialized, 1, 0) != 0)
+        {
+            return;
+        }
+
+        // Perform index creation (only executed on the first call).
+        CreateConversationIndex();
+        CreateConversationStateIndex();
+        CreateContentLogIndex();
+        CreateStateLogIndex();
+        CreateInstructionLogIndex();
+        CreateAgentCodeScriptIndex();
+        CreateAgentTaskIndex();
+    }
+
+    private IMongoCollection<AgentCodeScriptDocument> CreateAgentCodeScriptIndex()
+    {
+        var collection = GetCollectionOrCreate<AgentCodeScriptDocument>("AgentCodeScripts");
+        var curIndexes = collection.Indexes.List().ToList().Where(x => x.Contains("name")).Select(x => x["name"].AsString);
+
+        if (!curIndexes.Any(x => x.StartsWith("AgentId")))
+        {
+            CreateIndex(collection, Builders<AgentCodeScriptDocument>.IndexKeys.Ascending(x => x.AgentId));
+        }
+
+        if (!curIndexes.Any(x => x.StartsWith("Name")))
+        {
+            CreateIndex(collection, Builders<AgentCodeScriptDocument>.IndexKeys.Ascending(x => x.Name));
+        }
+
+        if (!curIndexes.Any(x => x.StartsWith("ScriptType")))
+        {
+            CreateIndex(collection, Builders<AgentCodeScriptDocument>.IndexKeys.Ascending(x => x.ScriptType));
+        }
+
+        return collection;
+    }
+
     private IMongoCollection<ConversationDocument> CreateConversationIndex()
     {
         var collection = GetCollectionOrCreate<ConversationDocument>("Conversations");
@@ -81,8 +126,7 @@ public class MongoDbContext
         var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
         if (createTimeIndex == null)
         {
-            var indexDef = Builders<ConversationDocument>.IndexKeys.Descending(x => x.CreatedTime);
-            collection.Indexes.CreateOne(new CreateIndexModel<ConversationDocument>(indexDef));
+            CreateIndex(collection, Builders<ConversationDocument>.IndexKeys.Descending(x => x.CreatedTime));
         }
         return collection;
     }
@@ -94,8 +138,7 @@ public class MongoDbContext
         var stateIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("States.Key"));
         if (stateIndex == null)
         {
-            var indexDef = Builders<ConversationStateDocument>.IndexKeys.Ascending("States.Key");
-            collection.Indexes.CreateOne(new CreateIndexModel<ConversationStateDocument>(indexDef));
+            CreateIndex(collection, Builders<ConversationStateDocument>.IndexKeys.Ascending("States.Key"));
         }
         return collection;
     }
@@ -107,8 +150,7 @@ public class MongoDbContext
         var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
         if (createTimeIndex == null)
         {
-            var indexDef = Builders<AgentTaskDocument>.IndexKeys.Descending(x => x.CreatedTime);
-            collection.Indexes.CreateOne(new CreateIndexModel<AgentTaskDocument>(indexDef));
+            CreateIndex(collection, Builders<AgentTaskDocument>.IndexKeys.Descending(x => x.CreatedTime));
         }
         return collection;
     }
@@ -120,8 +162,7 @@ public class MongoDbContext
         var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
         if (createTimeIndex == null)
         {
-            var indexDef = Builders<ConversationContentLogDocument>.IndexKeys.Ascending(x => x.CreatedTime);
-            collection.Indexes.CreateOne(new CreateIndexModel<ConversationContentLogDocument>(indexDef));
+            CreateIndex(collection, Builders<ConversationContentLogDocument>.IndexKeys.Ascending(x => x.CreatedTime));
         }
         return collection;
     }
@@ -133,8 +174,7 @@ public class MongoDbContext
         var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
         if (createTimeIndex == null)
         {
-            var indexDef = Builders<ConversationStateLogDocument>.IndexKeys.Ascending(x => x.CreatedTime);
-            collection.Indexes.CreateOne(new CreateIndexModel<ConversationStateLogDocument>(indexDef));
+            CreateIndex(collection, Builders<ConversationStateLogDocument>.IndexKeys.Ascending(x => x.CreatedTime));
         }
         return collection;
     }
@@ -146,68 +186,78 @@ public class MongoDbContext
         var createTimeIndex = indexes.FirstOrDefault(x => x.GetElement("name").ToString().StartsWith("CreatedTime"));
         if (createTimeIndex == null)
         {
-            var indexDef = Builders<InstructionLogDocument>.IndexKeys.Descending(x => x.CreatedTime);
-            collection.Indexes.CreateOne(new CreateIndexModel<InstructionLogDocument>(indexDef));
+            CreateIndex(collection, Builders<InstructionLogDocument>.IndexKeys.Descending(x => x.CreatedTime));
         }
         return collection;
+    }
+
+    private void CreateIndex<T>(IMongoCollection<T> collection, IndexKeysDefinition<T> indexKeyDef, CreateIndexOptions? options = null) where T : MongoBase
+    {
+        collection.Indexes.CreateOne(new CreateIndexModel<T>(indexKeyDef, options));
     }
     #endregion
     #endregion
 
     public IMongoCollection<AgentDocument> Agents
-        => GetCollectionOrCreate<AgentDocument>("Agents");
+        => GetCollection<AgentDocument>("Agents");
 
     public IMongoCollection<AgentTaskDocument> AgentTasks
-        => CreateAgentTaskIndex();
+        => GetCollection<AgentTaskDocument>("AgentTasks");
+
+    public IMongoCollection<AgentCodeScriptDocument> AgentCodeScripts
+        => GetCollection<AgentCodeScriptDocument>("AgentCodeScripts");
 
     public IMongoCollection<ConversationDocument> Conversations
-        => CreateConversationIndex();
+        => GetCollection<ConversationDocument>("Conversations");
 
     public IMongoCollection<ConversationDialogDocument> ConversationDialogs
-        => GetCollectionOrCreate<ConversationDialogDocument>("ConversationDialogs");
+        => GetCollection<ConversationDialogDocument>("ConversationDialogs");
 
     public IMongoCollection<ConversationStateDocument> ConversationStates
-        => CreateConversationStateIndex();
+        => GetCollection<ConversationStateDocument>("ConversationStates");
+
+    public IMongoCollection<ConversationFileDocument> ConversationFiles
+        => GetCollection<ConversationFileDocument>("ConversationFiles");
 
     public IMongoCollection<LlmCompletionLogDocument> LlmCompletionLogs
-        => GetCollectionOrCreate<LlmCompletionLogDocument>("LlmCompletionLogs");
+        => GetCollection<LlmCompletionLogDocument>("LlmCompletionLogs");
 
     public IMongoCollection<ConversationContentLogDocument> ContentLogs
-        => CreateContentLogIndex();
+        => GetCollection<ConversationContentLogDocument>("ConversationContentLogs");
 
     public IMongoCollection<ConversationStateLogDocument> StateLogs
-        => CreateStateLogIndex();
+        => GetCollection<ConversationStateLogDocument>("ConversationStateLogs");
 
     public IMongoCollection<UserDocument> Users
-        => GetCollectionOrCreate<UserDocument>("Users");
+        => GetCollection<UserDocument>("Users");
 
     public IMongoCollection<UserAgentDocument> UserAgents
-        => GetCollectionOrCreate<UserAgentDocument>("UserAgents");
+        => GetCollection<UserAgentDocument>("UserAgents");
 
     public IMongoCollection<PluginDocument> Plugins
-        => GetCollectionOrCreate<PluginDocument>("Plugins");
+        => GetCollection<PluginDocument>("Plugins");
 
     public IMongoCollection<TranslationMemoryDocument> TranslationMemories
-        => GetCollectionOrCreate<TranslationMemoryDocument>("TranslationMemories");
+        => GetCollection<TranslationMemoryDocument>("TranslationMemories");
 
     public IMongoCollection<KnowledgeCollectionConfigDocument> KnowledgeCollectionConfigs
-        => GetCollectionOrCreate<KnowledgeCollectionConfigDocument>("KnowledgeCollectionConfigs");
+        => GetCollection<KnowledgeCollectionConfigDocument>("KnowledgeCollectionConfigs");
 
     public IMongoCollection<KnowledgeCollectionFileMetaDocument> KnowledgeCollectionFileMeta
-        => GetCollectionOrCreate<KnowledgeCollectionFileMetaDocument>("KnowledgeCollectionFileMeta");
+        => GetCollection<KnowledgeCollectionFileMetaDocument>("KnowledgeCollectionFileMeta");
 
     public IMongoCollection<RoleDocument> Roles
-        => GetCollectionOrCreate<RoleDocument>("Roles");
+        => GetCollection<RoleDocument>("Roles");
 
     public IMongoCollection<RoleAgentDocument> RoleAgents
-        => GetCollectionOrCreate<RoleAgentDocument>("RoleAgents");
+        => GetCollection<RoleAgentDocument>("RoleAgents");
 
     public IMongoCollection<CrontabItemDocument> CrontabItems
-        => GetCollectionOrCreate<CrontabItemDocument>("CronTabItems");
+        => GetCollection<CrontabItemDocument>("CronTabItems");
 
     public IMongoCollection<GlobalStatisticsDocument> GlobalStats
-        => GetCollectionOrCreate<GlobalStatisticsDocument>("GlobalStats");
+        => GetCollection<GlobalStatisticsDocument>("GlobalStats");
 
     public IMongoCollection<InstructionLogDocument> InstructionLogs
-        => CreateInstructionLogIndex();
+        => GetCollection<InstructionLogDocument>("InstructionLogs");
 }

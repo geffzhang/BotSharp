@@ -15,6 +15,8 @@ public class WelcomeHook : ConversationHookBase
     private readonly BotSharpOptions _options;
     private readonly ChatHubSettings _settings;
 
+    public override string SelfId => string.Empty;
+
     public WelcomeHook(
         IServiceProvider services,
         IHubContext<SignalRHub> chatHub,
@@ -36,7 +38,7 @@ public class WelcomeHook : ConversationHookBase
     public override async Task OnUserAgentConnectedInitially(Conversation conversation)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var agent = db.GetAgent(conversation.AgentId);
+        var agent = await db.GetAgent(conversation.AgentId);
 
         // Check if the Welcome template exists.
         var welcomeTemplate = agent?.Templates?.FirstOrDefault(x => x.Name == ".welcome");
@@ -78,7 +80,7 @@ public class WelcomeHook : ConversationHookBase
                 };
 
                 await Task.Delay(300);
-                _storage.Append(conversation.Id, dialog);
+                await _storage.Append(conversation.Id, dialog);
                 await SendEvent(ChatEvent.OnMessageReceivedFromAssistant, conversation.Id, data);
             }
         }

@@ -1,6 +1,4 @@
 using BotSharp.Abstraction.Functions;
-using BotSharp.Abstraction.Infrastructures;
-using BotSharp.Abstraction.Instructs;
 using BotSharp.Abstraction.Instructs.Models;
 
 namespace BotSharp.Core.Instructs.Functions;
@@ -60,17 +58,6 @@ public class ExecuteTemplateFn : IFunctionCallback
             {
                 new(AgentRole.User, text)
             });
-
-            await HookEmitter.Emit<IInstructHook>(_services, async hook =>
-                await hook.OnResponseGenerated(new InstructResponseModel
-                {
-                    AgentId = agent.Id,
-                    TemplateName = templateName,
-                    Provider = completion.Provider,
-                    Model = completion.Model,
-                    UserMessage = text,
-                    CompletionText = response.Content
-                }), agent.Id);
 
             return response.Content;
         }

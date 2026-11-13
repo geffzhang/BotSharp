@@ -5,7 +5,7 @@ namespace BotSharp.Plugin.MongoStorage.Repository;
 
 public partial class MongoRepository
 {
-    public BotSharpStats? GetGlobalStats(string agentId, DateTime recordTime, StatsInterval interval)
+    public async Task<BotSharpStats?> GetGlobalStats(string agentId, DateTime recordTime, StatsInterval interval)
     {
         if (string.IsNullOrWhiteSpace(agentId))
         {
@@ -23,21 +23,23 @@ public partial class MongoRepository
         };
 
         var filterDef = builder.And(filters);
-        var found = _dc.GlobalStats.Find(filterDef).FirstOrDefault();
+        var found = await _dc.GlobalStats.Find(filterDef).FirstOrDefaultAsync();
 
         return found != null ? new BotSharpStats
         {
             AgentId = agentId,
             Count = new()
             {
-                AgentCallCount = found.Count.AgentCallCount
+                AgentCallCount = found.Count.AgentCallCount,
+                ImageGenerationTotalCount = found.Count.ImageGenerationTotalCount,
             },
             LlmCost = new()
             {
                 PromptTokens = found.LlmCost.PromptTokens,
                 CompletionTokens = found.LlmCost.CompletionTokens,
                 PromptTotalCost = found.LlmCost.PromptTotalCost,
-                CompletionTotalCost = found.LlmCost.CompletionTotalCost
+                CompletionTotalCost = found.LlmCost.CompletionTotalCost,
+                ImageGenerationTotalCost = found.LlmCost.ImageGenerationTotalCost
             },
             RecordTime = found.RecordTime,
             StartTime = startTime,
@@ -46,7 +48,7 @@ public partial class MongoRepository
         } : null;
     }
 
-    public bool SaveGlobalStats(BotSharpStatsDelta delta)
+    public async Task<bool> SaveGlobalStats(BotSharpStatsDelta delta)
     {
         if (delta == null || string.IsNullOrWhiteSpace(delta.AgentId))
         {
@@ -68,16 +70,18 @@ public partial class MongoRepository
         var updateDef = Builders<GlobalStatisticsDocument>.Update
                             .SetOnInsert(x => x.Id, Guid.NewGuid().ToString())
                             .Inc(x => x.Count.AgentCallCount, delta.CountDelta.AgentCallCountDelta)
+                            .Inc(x => x.Count.ImageGenerationTotalCount, delta.CountDelta.ImageGenerationTotalCountDelta)
                             .Inc(x => x.LlmCost.PromptTokens, delta.LlmCostDelta.PromptTokensDelta)
                             .Inc(x => x.LlmCost.CompletionTokens, delta.LlmCostDelta.CompletionTokensDelta)
                             .Inc(x => x.LlmCost.PromptTotalCost, delta.LlmCostDelta.PromptTotalCostDelta)
                             .Inc(x => x.LlmCost.CompletionTotalCost, delta.LlmCostDelta.CompletionTotalCostDelta)
+                            .Inc(x => x.LlmCost.ImageGenerationTotalCost, delta.LlmCostDelta.ImageGenerationTotalCostDelta)
                             .Set(x => x.StartTime, startTime)
                             .Set(x => x.EndTime, endTime)
                             .Set(x => x.Interval, delta.Interval)
                             .Set(x => x.RecordTime, delta.RecordTime);
 
-        _dc.GlobalStats.UpdateOne(filterDef, updateDef, _options);
+        await _dc.GlobalStats.UpdateOneAsync(filterDef, updateDef, _options);
         return true;
     }
 }

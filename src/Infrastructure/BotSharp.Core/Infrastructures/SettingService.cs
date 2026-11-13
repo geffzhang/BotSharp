@@ -25,10 +25,10 @@ public class SettingService : ISettingService
         return settings;
     }
 
-    public object GetDetail(string settingName, bool mask = false)
+    public async Task<object> GetDetail(string settingName, bool mask = false)
     {
         var pluginService = _services.GetRequiredService<PluginLoader>();
-        var plugins = pluginService.GetPlugins(_services);
+        var plugins = await pluginService.GetPlugins(_services);
         var plugin = plugins.First(x => x.Module.Settings.Name == settingName);
         var instance = plugin.Module.GetNewSettingsInstance();
 
@@ -46,8 +46,8 @@ public class SettingService : ISettingService
         {
             return string.Empty;
         }
-        value = value.Substring(0, value.Length / 2 - 1) 
-            + string.Join("", Enumerable.Repeat("*", value.Length / 2));
-        return value;
+        int keepLength = (value.Length - 1) / 2;
+        return value.Substring(0, keepLength) 
+            + string.Join("", Enumerable.Repeat("*", value.Length - keepLength));
     }
 }

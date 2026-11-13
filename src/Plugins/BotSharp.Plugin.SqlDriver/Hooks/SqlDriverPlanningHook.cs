@@ -1,9 +1,5 @@
-using BotSharp.Abstraction.Messaging.Enums;
-using BotSharp.Abstraction.Messaging.Models.RichContent.Template;
-using BotSharp.Abstraction.Messaging.Models.RichContent;
-using BotSharp.Abstraction.Messaging;
-using BotSharp.Abstraction.Planning;
-using BotSharp.Core.Infrastructures;
+using BotSharp.Abstraction.Infrastructures.Enums;
+using BotSharp.Abstraction.MLTasks;
 
 namespace BotSharp.Plugin.SqlDriver.Hooks;
 
@@ -27,7 +23,7 @@ public class SqlDriverPlanningHook : IPlanningHook
         var routing = _services.GetRequiredService<IRoutingService>();
         await routing.InvokeFunction("validate_sql", msg);
 
-        await HookEmitter.Emit<ISqlDriverHook>(_services, async (hook) =>
+        await HookEmitter.Emit<IText2SqlHook>(_services, async (hook) =>
         {
             await hook.SqlGenerated(msg);
         }, msg.CurrentAgentId);
@@ -48,8 +44,7 @@ public class SqlDriverPlanningHook : IPlanningHook
         {
             FunctionArgs = JsonSerializer.Serialize(new ExecuteQueryArgs
             {
-                SqlStatements = [msg.Content],
-                FormattingResult = settings.FormattingResult
+                SqlStatements = [msg.Content]
             })
         };
         await routing.InvokeFunction("execute_sql", executionMsg);
@@ -64,10 +59,10 @@ public class SqlDriverPlanningHook : IPlanningHook
     public async Task<string> GetSummaryAdditionalRequirements(string planner, RoleDialogModel message)
     {
         var settings = _services.GetRequiredService<SqlDriverSetting>();
-        var sqlHooks = _services.GetServices<ISqlDriverHook>();
+        var sqlHook = _services.GetRequiredService<IText2SqlHook>();
         var agentService = _services.GetRequiredService<IAgentService>();
 
-        var dbType = !sqlHooks.IsNullOrEmpty() ? sqlHooks.First().GetDatabaseType(message) : settings.DatabaseType;
+        var dbType = sqlHook.GetDatabaseType(message);
         var agent = await agentService.LoadAgent(BuiltInAgentId.SqlDriver);
 
         return agent.Templates.FirstOrDefault(x => x.Name == $"database.summarize.{dbType}")?.Content ?? string.Empty;
@@ -78,7 +73,7 @@ public class SqlDriverPlanningHook : IPlanningHook
         string pattern = @"```sql\s*([\s\S]*?)\s*```";
         var sql = Regex.Match(text, pattern).Groups[1].Value;
         var state = _services.GetRequiredService<IConversationStateService>();
-        var tmpTable = state.GetState("tmp_table");
+        var tmpTable = state.GetState(DataStateConst.TMP_TABLE);
 
         var elements = new List<ElementButton>() { };
         elements.Add(new ElementButton

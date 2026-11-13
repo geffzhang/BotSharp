@@ -11,21 +11,26 @@ public class CommonContentGeneratingHook : IContentGeneratingHook
 
     public async Task AfterGenerated(RoleDialogModel message, TokenStatsModel tokenStats)
     {
-        SaveLlmCompletionLog(message, tokenStats);
-        await Task.CompletedTask;
+        await SaveLlmCompletionLog(message, tokenStats);
     }
 
-    private void SaveLlmCompletionLog(RoleDialogModel message, TokenStatsModel tokenStats)
+    private async Task SaveLlmCompletionLog(RoleDialogModel message, TokenStatsModel tokenStats)
     {
         var convSettings = _services.GetRequiredService<ConversationSetting>();
-        if (!convSettings.EnableLlmCompletionLog) return;
+        var conv = _services.GetRequiredService<IConversationService>();
+
+        if (!convSettings.EnableLlmCompletionLog
+            || string.IsNullOrEmpty(conv.ConversationId)
+            || string.IsNullOrWhiteSpace(tokenStats.Prompt)
+            || string.IsNullOrWhiteSpace(message.Content))
+        {
+            return;
+        }
 
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var state = _services.GetRequiredService<IConversationStateService>();
-
         var completionLog = new LlmCompletionLog
         {
-            ConversationId = state.GetConversationId(),
+            ConversationId = conv.ConversationId,
             MessageId = message.MessageId,
             AgentId = message.CurrentAgentId,
             Prompt = tokenStats.Prompt,
@@ -33,6 +38,6 @@ public class CommonContentGeneratingHook : IContentGeneratingHook
             CreatedTime = DateTime.UtcNow
         };
 
-        db.SaveLlmCompletionLog(completionLog);
+        await db.SaveLlmCompletionLog(completionLog);
     }
 }

@@ -1,6 +1,7 @@
-using BotSharp.Abstraction.Conversations.Enums;
-using BotSharp.Abstraction.Hooks;
 using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Infrastructures.Enums;
+using BotSharp.Abstraction.Users.Models;
+using System.Threading.Tasks;
 
 namespace BotSharp.Core.Conversations.Services;
 
@@ -13,7 +14,6 @@ public partial class ConversationService : IConversationService
     private readonly IConversationStorage _storage;
     private readonly IConversationStateService _state;
     private string _conversationId;
-    private const string AIAssistant = BuiltInAgentId.AIAssistant;
 
     public string ConversationId => _conversationId;
 
@@ -39,43 +39,49 @@ public partial class ConversationService : IConversationService
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
         var fileStorage = _services.GetRequiredService<IFileStorageService>();
-        var isDeleted = db.DeleteConversations(ids);
+        var isDeleted = await db.DeleteConversations(ids);
         fileStorage.DeleteConversationFiles(ids);
-        return await Task.FromResult(isDeleted);
+        return isDeleted;
     }
 
-    public async Task<Conversation> UpdateConversationTitle(string id, string title)
+    public async Task<bool> UpdateConversationTitle(string id, string title)
     {
-        var db = _services.GetRequiredService<IBotSharpRepository>();
-        db.UpdateConversationTitle(id, title);
-        var conversation = db.GetConversation(id);
-        return conversation;
+        if (!string.IsNullOrEmpty(title))
+        {
+            var db = _services.GetRequiredService<IBotSharpRepository>();
+            await db.UpdateConversationTitle(id, title);
+        }
+
+        return true;
     }
 
-    public async Task<Conversation> UpdateConversationTitleAlias(string id, string titleAlias)
+    public async Task<bool> UpdateConversationTitleAlias(string id, string titleAlias)
     {
-        var db = _services.GetRequiredService<IBotSharpRepository>();
-        db.UpdateConversationTitleAlias(id, titleAlias);
-        var conversation = db.GetConversation(id);
-        return conversation;
+        if (!string.IsNullOrEmpty(titleAlias))
+        {
+            var db = _services.GetRequiredService<IBotSharpRepository>();
+            await db.UpdateConversationTitleAlias(id, titleAlias);
+        }
+
+        return true;
     }
 
     public async Task<bool> UpdateConversationTags(string conversationId, List<string> toAddTags, List<string> toDeleteTags)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        return db.UpdateConversationTags(conversationId, toAddTags, toDeleteTags);
+        return await db.UpdateConversationTags(conversationId, toAddTags, toDeleteTags);
     }
 
     public async Task<bool> UpdateConversationMessage(string conversationId, UpdateMessageRequest request)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        return db.UpdateConversationMessage(conversationId, request);
+        return await db.UpdateConversationMessage(conversationId, request);
     }
 
     public async Task<Conversation> GetConversation(string id, bool isLoadStates = false)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var conversation = db.GetConversation(id);
+        var conversation = await db.GetConversation(id);
         return conversation;
     }
 
@@ -87,6 +93,13 @@ public partial class ConversationService : IConversationService
         }
 
         var db = _services.GetRequiredService<IBotSharpRepository>();
+
+        var hooks = _services.GetHooks<IConversationHook>(filter.AgentId);
+        foreach (var hook in hooks)
+        {
+            await hook.OnConversationsListing(filter);
+        }
+
         var conversations = await db.GetConversations(filter);
         return conversations;
     }
@@ -94,19 +107,19 @@ public partial class ConversationService : IConversationService
     public async Task<List<Conversation>> GetLastConversations()
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        return db.GetLastConversations();
+        return await db.GetLastConversations();
     }
 
     public async Task<List<string>> GetIdleConversations(int batchSize, int messageLimit, int bufferHours, IEnumerable<string> excludeAgentIds)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        return db.GetIdleConversations(batchSize, messageLimit, bufferHours, excludeAgentIds ?? new List<string>());
+        return await db.GetIdleConversations(batchSize, messageLimit, bufferHours, excludeAgentIds ?? new List<string>());
     }
 
     public async Task<Conversation> NewConversation(Conversation sess)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
-        var user = db.GetUserById(_user.Id);
+        var user = await db.GetUserById(_user.Id);
         var foundUserId = user?.Id ?? string.Empty;
 
         var record = sess;
@@ -115,9 +128,14 @@ public partial class ConversationService : IConversationService
         record.Tags = sess.Tags;
         record.Title = string.IsNullOrEmpty(record.Title) ? "New Conversation" : record.Title;
 
-        db.CreateNewConversation(record);
+        var hooks = _services.GetHooks<IConversationHook>(sess.AgentId);
+        foreach (var hook in hooks)
+        {
+            // If user connect agent first time
+            await hook.OnConversationCreating(record);
+        }
 
-        var hooks = _services.GetHooks<IConversationHook>(record.AgentId);
+        await db.CreateNewConversation(record);
 
         foreach (var hook in hooks)
         {
@@ -127,6 +145,8 @@ public partial class ConversationService : IConversationService
             await hook.OnConversationInitialized(record);
         }
 
+        _logger.LogInformation($"Conversation created: {record.Id}, AgentId: {record.AgentId}, UserId: {record.UserId}, Channel: {record.Channel}");
+
         return record;
     }
 
@@ -135,14 +155,14 @@ public partial class ConversationService : IConversationService
         throw new NotImplementedException();
     }
 
-    public List<RoleDialogModel> GetDialogHistory(int lastCount = 100, bool fromBreakpoint = true, IEnumerable<string>? includeMessageTypes = null)
+    public async Task<List<RoleDialogModel>> GetDialogHistory(int lastCount = 100, bool fromBreakpoint = true, IEnumerable<string>? includeMessageTypes = null, ConversationDialogFilter? filter = null)
     {
         if (string.IsNullOrEmpty(_conversationId))
         {
             throw new ArgumentNullException("ConversationId is null.");
         }
 
-        var dialogs = _storage.GetDialogs(_conversationId);
+        var dialogs = await _storage.GetDialogs(_conversationId, filter);
 
         if (!includeMessageTypes.IsNullOrEmpty())
         {
@@ -156,7 +176,7 @@ public partial class ConversationService : IConversationService
         if (fromBreakpoint)
         {
             var db = _services.GetRequiredService<IBotSharpRepository>();
-            var breakpoint = db.GetConversationBreakpoint(_conversationId);
+            var breakpoint = await db.GetConversationBreakpoint(_conversationId);
 
             if (breakpoint != null)
             {
@@ -168,16 +188,16 @@ public partial class ConversationService : IConversationService
             }
         }
 
-        var agentMsgCount = GetAgentMessageCount();
+        var agentMsgCount = await GetAgentMessageCount();
         var count = agentMsgCount.HasValue && agentMsgCount.Value > 0 ? agentMsgCount.Value : lastCount;
 
-        return dialogs.TakeLast(count).ToList();
+        return filter?.Order == "desc" ? dialogs.Take(count).ToList() : dialogs.TakeLast(count).ToList();
     }
 
-    public void SetConversationId(string conversationId, List<MessageState> states, bool isReadOnly = false)
+    public async Task SetConversationId(string conversationId, List<MessageState> states, bool isReadOnly = false)
     {
         _conversationId = conversationId;
-        _state.Load(_conversationId, isReadOnly);
+        await _state.Load(_conversationId, isReadOnly);
         states.ForEach(x => _state.SetState(x.Key, x.Value, activeRounds: x.ActiveRounds, isNeedVersion: !x.Global, source: StateSource.External));
     }
 
@@ -189,7 +209,7 @@ public partial class ConversationService : IConversationService
         if (converation == null)
         {
             var state = _services.GetRequiredService<IConversationStateService>();
-            var channel = state.GetState("channel");
+            var channel = state.GetState(StateConst.CHANNEL);
             var channelId = state.GetState("channel_id");
             var userId = state.GetState("current_user_id");
             var sess = new Conversation
@@ -212,20 +232,20 @@ public partial class ConversationService : IConversationService
     }
 
 
-    private int? GetAgentMessageCount()
+    private async Task<int?> GetAgentMessageCount()
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
         var routingCtx = _services.GetRequiredService<IRoutingContext>();
 
         if (string.IsNullOrEmpty(routingCtx.EntryAgentId)) return null;
 
-        var agent = db.GetAgent(routingCtx.EntryAgentId, basicsOnly: true);
+        var agent = await db.GetAgent(routingCtx.EntryAgentId, basicsOnly: true);
         return agent?.MaxMessageCount;
     }
 
-    public void SaveStates()
+    public async Task SaveStates()
     {
-        _state.Save();
+        await _state.Save();
     }
 
     public async Task<List<string>> GetConversationStateSearhKeys(ConversationStateKeysFilter filter)
@@ -246,7 +266,7 @@ public partial class ConversationService : IConversationService
 
         var (isAdmin, user) = await userService.IsAdminUser(_user.Id);
         filter.UserIds = !isAdmin && user?.Id != null ? [user.Id] : [];
-        keys = db.GetConversationStateSearchKeys(filter);
+        keys = await db.GetConversationStateSearchKeys(filter);
         keys = filter.PreLoad ? keys : keys.Where(x => x.Contains(filter.Query ?? string.Empty, StringComparison.OrdinalIgnoreCase)).ToList();
         return keys.OrderBy(x => x).Take(filter.KeyLimit).ToList();
     }

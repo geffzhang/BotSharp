@@ -1,3 +1,4 @@
+using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.Agents;
 using BotSharp.Abstraction.Conversations.Enums;
 using BotSharp.Abstraction.Hooks;
@@ -42,7 +43,7 @@ public class ChatCompletionProvider : IChatCompletion
             await hook.BeforeGenerating(agent, conversations);
         }
 
-        var content = string.Join("\r\n", conversations.Select(x => $"{x.Role}: {x.Content}")).Trim();
+        var content = string.Join("\r\n", conversations.Select(x => $"{x.Role}: {x.LlmContent}")).Trim();
         content += $"\r\n{AgentRole.Assistant}: ";
 
         var llama = _services.GetRequiredService<LlamaAiModel>();
@@ -118,11 +119,11 @@ public class ChatCompletionProvider : IChatCompletion
         Func<RoleDialogModel, Task> onMessageReceived,
         Func<RoleDialogModel, Task> onFunctionExecuting)
     {
-        var content = string.Join("\r\n", conversations.Select(x => $"{x.Role}: {x.Content}")).Trim();
+        var content = string.Join("\r\n", conversations.Select(x => $"{x.Role}: {x.LlmContent}")).Trim();
         content += $"\r\n{AgentRole.Assistant}: ";
 
         var state = _services.GetRequiredService<IConversationStateService>();
-        var model = state.GetState("model", _settings.DefaultModel);
+        var model = state.GetState(LlmStateConst.MODEL, _settings.DefaultModel);
 
         var llama = _services.GetRequiredService<LlamaAiModel>();
         llama.LoadModel(model);
@@ -170,7 +171,7 @@ public class ChatCompletionProvider : IChatCompletion
     public async Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent, List<RoleDialogModel> conversations)
     {
         var state = _services.GetRequiredService<IConversationStateService>();
-        var model = state.GetState("model", "llama-2-7b-chat.Q8_0");
+        var model = state.GetState(LlmStateConst.MODEL, "llama-2-7b-chat.Q8_0");
 
         var llama = _services.GetRequiredService<LlamaAiModel>();
         llama.LoadModel(model);
@@ -206,22 +207,32 @@ public class ChatCompletionProvider : IChatCompletion
             MessageId = messageId
         };
 
-        await foreach (var response in executor.InferAsync(agent.Instruction, inferenceParams))
-        {
-            Console.Write(response);
-            textStream.Collect(response);
+        var streamingCancellation = _services.GetRequiredService<IConversationCancellationService>();
+        var cancellationToken = streamingCancellation.GetToken(conv.ConversationId);
 
-            var content = new RoleDialogModel(AgentRole.Assistant, response)
+        try
+        {
+            await foreach (var response in executor.InferAsync(agent.Instruction, inferenceParams, cancellationToken))
             {
-                CurrentAgentId = agent.Id,
-                MessageId = messageId
-            };
-            hub.Push(new()
-            {
-                EventName = ChatEvent.OnReceiveLlmStreamMessage,
-                RefId = conv.ConversationId,
-                Data = content
-            });
+                Console.Write(response);
+                textStream.Collect(response);
+
+                var content = new RoleDialogModel(AgentRole.Assistant, response)
+                {
+                    CurrentAgentId = agent.Id,
+                    MessageId = messageId
+                };
+                hub.Push(new()
+                {
+                    EventName = ChatEvent.OnReceiveLlmStreamMessage,
+                    RefId = conv.ConversationId,
+                    Data = content
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Streaming was cancelled for conversation {ConversationId}", conv.ConversationId);
         }
 
         responseMessage = new RoleDialogModel(AgentRole.Assistant, textStream.GetText())

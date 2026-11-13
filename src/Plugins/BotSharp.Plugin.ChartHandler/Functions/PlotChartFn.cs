@@ -12,7 +12,6 @@ public class PlotChartFn : IFunctionCallback
     public string Name => "util-chart-plot_chart";
     public string Indication => "Plotting chart";
 
-
     public PlotChartFn(
         IServiceProvider services,
         ILogger<PlotChartFn> logger,
@@ -32,24 +31,24 @@ public class PlotChartFn : IFunctionCallback
         var args = JsonSerializer.Deserialize<LlmContextIn>(message.FunctionArgs);
 
         var agent = await agentService.GetAgent(message.CurrentAgentId);
-        var inst = GetChartPlotInstruction(message.CurrentAgentId);
+        var inst = await GetChartPlotInstruction(message.CurrentAgentId);
         var innerAgent = new Agent
         {
-            Id = agent.Id,
-            Name = agent.Name,
+            Id = agent?.Id ?? BuiltInAgentId.AIProgrammer,
+            Name = agent?.Name ?? "AI Programmer",
             Instruction = inst,
             LlmConfig = GetLlmConfig(),
-            TemplateDict = new Dictionary<string, object>
+            TemplateDict = new()
             {
-                { "plotting_requirement", args?.PlottingRequirement ?? string.Empty },
-                { "chart_element_id", $"chart-{message.MessageId}" }
+                ["plotting_requirement"] = args?.PlottingRequirement ?? string.Empty,
+                ["chart_element_id"] = $"chart-{message.MessageId}"
             }
         };
 
         var dialogs = routingCtx.GetDialogs();
         if (dialogs.IsNullOrEmpty())
         {
-            dialogs = convService.GetDialogHistory();
+            dialogs = await convService.GetDialogHistory();
         }
 
         var messageLimit = _settings.ChartPlot?.MessageLimit > 0 ? _settings.ChartPlot.MessageLimit.Value : 50;
@@ -61,39 +60,33 @@ public class PlotChartFn : IFunctionCallback
         });
 
         var response = await GetChatCompletion(innerAgent, dialogs);
-        var obj = response.JsonContent<LlmContextOut>();
-        message.Content = obj?.GreetingMessage ?? "Here is the chart you ask for:";
+
+        LlmContextOut? ret = null;
+        var errorMsg = "Error when deserializing ai chart response";
+        try
+        {
+            ret = response.JsonContent<LlmContextOut>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, errorMsg);
+            ret = new LlmContextOut
+            {
+                GreetingMessage = errorMsg
+            };
+        }
+        
+        message.Content = ret?.GreetingMessage ?? "Here is the chart you ask for:";
         message.RichContent = new RichContent<IRichMessage>
         {
             Recipient = new Recipient { Id = convService.ConversationId },
             Message = new ProgramCodeTemplateMessage
             {
-                Text = obj?.JsCode ?? string.Empty,
+                Text = ret?.JsCode ?? string.Empty,
+                CodeScript = ret?.JsCode,
                 Language = "javascript"
             }
         };
-
-        if (!string.IsNullOrEmpty(obj?.ReportSummary))
-        {
-            message.AdditionalMessageWrapper = new()
-            {
-                SendingInterval = 1500,
-                SaveToDb = true,
-                Messages = new List<RoleDialogModel>
-                {
-                    new(AgentRole.Assistant, obj.ReportSummary)
-                    {
-                        MessageId = message.MessageId,
-                        MessageLabel = "chart_report_summary",
-                        Indication = "Summarizing",
-                        CurrentAgentId = message.CurrentAgentId,
-                        FunctionName = message.FunctionName,
-                        FunctionArgs = message.FunctionArgs,
-                        CreatedAt = DateTime.UtcNow
-                    }
-                }
-            };
-        }
 
         message.StopCompletion = true;
         return true;
@@ -116,7 +109,7 @@ public class PlotChartFn : IFunctionCallback
         }
     }
 
-    private string GetChartPlotInstruction(string agentId)
+    private async Task<string> GetChartPlotInstruction(string agentId)
     {
         var db = _services.GetRequiredService<IBotSharpRepository>();
         var state = _services.GetRequiredService<IConversationStateService>();
@@ -126,12 +119,12 @@ public class PlotChartFn : IFunctionCallback
 
         if (!string.IsNullOrEmpty(templateName))
         {
-            templateContent = db.GetAgentTemplate(agentId, templateName);
+            templateContent = await db.GetAgentTemplate(agentId, templateName);
         }
         else
         {
-            templateName = "util-chart-plot_instruction";
-            templateContent = db.GetAgentTemplate(BuiltInAgentId.UtilityAssistant, templateName);
+            templateName = "chart-js-generate_instruction";
+            templateContent = await db.GetAgentTemplate(BuiltInAgentId.AIProgrammer, templateName);
         }
 
         return templateContent;
@@ -139,16 +132,16 @@ public class PlotChartFn : IFunctionCallback
 
     private (string, string) GetLlmProviderModel()
     {
-        var provider = "openai";
-        var model = "gpt-5";
+        var provider = _settings.ChartPlot?.Provider;
+        var model = _settings.ChartPlot?.Model;
 
-        var state = _services.GetRequiredService<IConversationStateService>();
-        provider = state.GetState("chart_plot_llm_provider")
-                        .IfNullOrEmptyAs(_settings.ChartPlot?.LlmProvider)
-                        .IfNullOrEmptyAs(provider);
-        model = state.GetState("chart_plot_llm_model")
-                     .IfNullOrEmptyAs(_settings.ChartPlot?.LlmModel)
-                     .IfNullOrEmptyAs(model);
+        if (!string.IsNullOrEmpty(provider) && !string.IsNullOrEmpty(model))
+        {
+            return (provider, model);
+        }
+
+        provider = "openai";
+        model = "gpt-5";
 
         return (provider, model);
     }
@@ -157,10 +150,6 @@ public class PlotChartFn : IFunctionCallback
     {
         var maxOutputTokens = _settings?.ChartPlot?.MaxOutputTokens ?? 8192;
         var reasoningEffortLevel = _settings?.ChartPlot?.ReasoningEffortLevel ?? "minimal";
-
-        var state = _services.GetRequiredService<IConversationStateService>();
-        maxOutputTokens = int.TryParse(state.GetState("chart_plot_max_output_tokens"), out var tokens) ? tokens : maxOutputTokens;
-        reasoningEffortLevel = state.GetState("chart_plot_reasoning_effort_level").IfNullOrEmptyAs(reasoningEffortLevel);
 
         return new AgentLlmConfig
         {

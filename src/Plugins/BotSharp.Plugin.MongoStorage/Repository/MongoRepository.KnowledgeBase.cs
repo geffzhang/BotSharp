@@ -1,4 +1,6 @@
+using BotSharp.Abstraction.Knowledges.Filters;
 using BotSharp.Abstraction.Knowledges.Models;
+using BotSharp.Abstraction.VectorStorage.Filters;
 using BotSharp.Abstraction.VectorStorage.Models;
 
 namespace BotSharp.Plugin.MongoStorage.Repository;
@@ -6,7 +8,7 @@ namespace BotSharp.Plugin.MongoStorage.Repository;
 public partial class MongoRepository
 {
     #region Configs
-    public bool AddKnowledgeCollectionConfigs(List<VectorCollectionConfig> configs, bool reset = false)
+    public async Task<bool> AddKnowledgeCollectionConfigs(List<VectorCollectionConfig> configs, bool reset = false)
     {
         var filter = Builders<KnowledgeCollectionConfigDocument>.Filter.Empty;
         var docs = configs?.Where(x => !string.IsNullOrWhiteSpace(x.Name))
@@ -21,8 +23,8 @@ public partial class MongoRepository
 
         if (reset)
         {
-            _dc.KnowledgeCollectionConfigs.DeleteMany(filter);
-            _dc.KnowledgeCollectionConfigs.InsertMany(docs);
+            await _dc.KnowledgeCollectionConfigs.DeleteManyAsync(filter);
+            await _dc.KnowledgeCollectionConfigs.InsertManyAsync(docs);
             return true;
         }
 
@@ -32,7 +34,7 @@ public partial class MongoRepository
 
         var names = docs.Select(x => x.Name).ToList();
         filter = Builders<KnowledgeCollectionConfigDocument>.Filter.In(x => x.Name, names);
-        var savedConfigs = _dc.KnowledgeCollectionConfigs.Find(filter).ToList();
+        var savedConfigs = await _dc.KnowledgeCollectionConfigs.Find(filter).ToListAsync();
         
         foreach (var doc in docs)
         {
@@ -52,7 +54,7 @@ public partial class MongoRepository
 
         if (!insertDocs.IsNullOrEmpty())
         {
-            _dc.KnowledgeCollectionConfigs.InsertMany(docs);
+            await _dc.KnowledgeCollectionConfigs.InsertManyAsync(docs);
         }
 
         if (!updateDocs.IsNullOrEmpty())
@@ -60,23 +62,23 @@ public partial class MongoRepository
             foreach (var doc in updateDocs)
             {
                 filter = Builders<KnowledgeCollectionConfigDocument>.Filter.Eq(x => x.Id, doc.Id);
-                _dc.KnowledgeCollectionConfigs.ReplaceOne(filter, doc);
+                await _dc.KnowledgeCollectionConfigs.ReplaceOneAsync(filter, doc);
             }
         }
         
         return true;
     }
 
-    public bool DeleteKnowledgeCollectionConfig(string collectionName)
+    public async Task<bool> DeleteKnowledgeCollectionConfig(string collectionName)
     {
         if (string.IsNullOrWhiteSpace(collectionName)) return false;
 
         var filter = Builders<KnowledgeCollectionConfigDocument>.Filter.Eq(x => x.Name, collectionName);
-        var deleted = _dc.KnowledgeCollectionConfigs.DeleteMany(filter);
+        var deleted = await _dc.KnowledgeCollectionConfigs.DeleteManyAsync(filter);
         return deleted.DeletedCount > 0;
     }
 
-    public IEnumerable<VectorCollectionConfig> GetKnowledgeCollectionConfigs(VectorCollectionConfigFilter filter)
+    public async Task<IEnumerable<VectorCollectionConfig>> GetKnowledgeCollectionConfigs(VectorCollectionConfigFilter filter)
     {
         if (filter == null)
         {
@@ -97,13 +99,13 @@ public partial class MongoRepository
             filters.Add(builder.In(x => x.Type, filter.CollectionTypes));
         }
 
-        if (!filter.VectorStroageProviders.IsNullOrEmpty())
+        if (!filter.VectorStorageProviders.IsNullOrEmpty())
         {
-            filters.Add(builder.In(x => x.VectorStore.Provider, filter.VectorStroageProviders));
+            filters.Add(builder.In(x => x.VectorStore.Provider, filter.VectorStorageProviders));
         }
 
         // Get data
-        var configs = _dc.KnowledgeCollectionConfigs.Find(Builders<KnowledgeCollectionConfigDocument>.Filter.And(filters)).ToList();
+        var configs = await _dc.KnowledgeCollectionConfigs.Find(Builders<KnowledgeCollectionConfigDocument>.Filter.And(filters)).ToListAsync();
 
         return configs.Select(x => new VectorCollectionConfig
         {
@@ -113,10 +115,23 @@ public partial class MongoRepository
             TextEmbedding = KnowledgeEmbeddingConfigMongoModel.ToDomainModel(x.TextEmbedding)
         });
     }
+
+#if !DEBUG
+    [SharpCache(10)]
+#endif
+    public async Task<VectorCollectionConfig> GetKnowledgeCollectionConfig(string collectionName, string knowledgebaseProvider)
+    {
+        var configs = await GetKnowledgeCollectionConfigs(new VectorCollectionConfigFilter
+        {
+            CollectionNames = [collectionName],
+            VectorStorageProviders = [knowledgebaseProvider]
+        });
+        return configs?.FirstOrDefault();
+    }
     #endregion
 
     #region Documents
-    public bool SaveKnolwedgeBaseFileMeta(KnowledgeDocMetaData metaData)
+    public async Task<bool> SaveKnolwedgeBaseFileMeta(KnowledgeFileMetaData metaData)
     {
         if (metaData == null
             || string.IsNullOrWhiteSpace(metaData.Collection)
@@ -140,14 +155,14 @@ public partial class MongoRepository
             CreateUserId = metaData.CreateUserId
         };
 
-        _dc.KnowledgeCollectionFileMeta.InsertOne(doc);
+        await _dc.KnowledgeCollectionFileMeta.InsertOneAsync(doc);
         return true;
     }
 
-    public bool DeleteKnolwedgeBaseFileMeta(string collectionName, string vectorStoreProvider, Guid? fileId = null)
+    public async Task<bool> DeleteKnolwedgeBaseFileMeta(string collectionName, string knowledgebaseProvider, Guid? fileId = null)
     {
         if (string.IsNullOrWhiteSpace(collectionName)
-            || string.IsNullOrWhiteSpace(vectorStoreProvider))
+            || string.IsNullOrWhiteSpace(knowledgebaseProvider))
         {
             return false;
         }
@@ -156,7 +171,7 @@ public partial class MongoRepository
         var filters = new List<FilterDefinition<KnowledgeCollectionFileMetaDocument>>()
         {
             builder.Eq(x => x.Collection, collectionName),
-            builder.Eq(x => x.VectorStoreProvider, vectorStoreProvider)
+            builder.Eq(x => x.VectorStoreProvider, knowledgebaseProvider)
         };
 
         if (fileId != null)
@@ -164,23 +179,23 @@ public partial class MongoRepository
             filters.Add(builder.Eq(x => x.FileId, fileId));
         }
 
-        var res = _dc.KnowledgeCollectionFileMeta.DeleteMany(builder.And(filters));
+        var res = await _dc.KnowledgeCollectionFileMeta.DeleteManyAsync(builder.And(filters));
         return res.DeletedCount > 0;
     }
 
-    public async ValueTask<PagedItems<KnowledgeDocMetaData>> GetKnowledgeBaseFileMeta(string collectionName, string vectorStoreProvider, KnowledgeFileFilter filter)
+    public async Task<PagedItems<KnowledgeFileMetaData>> GetKnowledgeBaseFileMeta(string collectionName, string knowledgebaseProvider, KnowledgeFileFilter filter)
     {
         if (string.IsNullOrWhiteSpace(collectionName)
-            || string.IsNullOrWhiteSpace(vectorStoreProvider))
+            || string.IsNullOrWhiteSpace(knowledgebaseProvider))
         {
-            return new PagedItems<KnowledgeDocMetaData>();
+            return new PagedItems<KnowledgeFileMetaData>();
         }
 
         var builder = Builders<KnowledgeCollectionFileMetaDocument>.Filter;
         var docFilters = new List<FilterDefinition<KnowledgeCollectionFileMetaDocument>>()
         {
             builder.Eq(x => x.Collection, collectionName),
-            builder.Eq(x => x.VectorStoreProvider, vectorStoreProvider)
+            builder.Eq(x => x.VectorStoreProvider, knowledgebaseProvider)
         };
         
         // Apply filters
@@ -222,7 +237,7 @@ public partial class MongoRepository
         var docs = docsTask.Result.ToList();
         var count = countTask.Result;
 
-        var files = docs?.Select(x => new KnowledgeDocMetaData
+        var files = docs?.Select(x => new KnowledgeFileMetaData
         {
             Collection = x.Collection,
             FileId = x.FileId,
@@ -236,7 +251,7 @@ public partial class MongoRepository
             CreateUserId = x.CreateUserId
         })?.ToList() ?? [];
 
-        return new PagedItems<KnowledgeDocMetaData>
+        return new PagedItems<KnowledgeFileMetaData>
         {
             Items = files,
             Count = count

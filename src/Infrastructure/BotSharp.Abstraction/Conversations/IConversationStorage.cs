@@ -1,8 +1,10 @@
+using BotSharp.Abstraction.Repositories.Filters;
+
 namespace BotSharp.Abstraction.Conversations;
 
 public interface IConversationStorage
 {
-    void Append(string conversationId, RoleDialogModel dialog);
-    void Append(string conversationId, IEnumerable<RoleDialogModel> dialogs);
-    List<RoleDialogModel> GetDialogs(string conversationId);
+    Task Append(string conversationId, RoleDialogModel dialog);
+    Task Append(string conversationId, IEnumerable<RoleDialogModel> dialogs);
+    Task<List<RoleDialogModel>> GetDialogs(string conversationId, ConversationDialogFilter? filter = null);
 }

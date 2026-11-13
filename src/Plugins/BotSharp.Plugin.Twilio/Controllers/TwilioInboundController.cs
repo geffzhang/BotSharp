@@ -53,6 +53,9 @@ public class TwilioInboundController : TwilioController
             instruction.SpeechPaths.Add(request.InitAudioFile);
         }
 
+        // Authenticate (synchronous, so identity writes survive into the async session hooks)
+        HookEmitter.Emit<ITwilioSessionHook>(_services, hook => hook.OnAuthenticate(request), request.AgentId);
+
         // Before creating session
         await HookEmitter.Emit<ITwilioSessionHook>(_services, async hook =>
         {
@@ -76,17 +79,36 @@ public class TwilioInboundController : TwilioController
         if (twilio.MachineDetected(request))
         {
             response = new VoiceResponse();
-            await HookEmitter.Emit<ITwilioCallStatusHook>(_services, 
+            // Authenticate (synchronous, so identity writes survive into the async status hook)
+            HookEmitter.Emit<ITwilioCallStatusHook>(_services, hook => hook.OnAuthenticate(request), request.AgentId);
+            await HookEmitter.Emit<ITwilioCallStatusHook>(_services,
                 async hook => await hook.OnVoicemailStarting(request), request.AgentId);
 
-            var url = twilio.GetSpeechPath(request.ConversationId, "voicemail.mp3");
-            response.Play(new Uri(url));
+            var voicemail = twilio.GetSavedSpeechFile(request.ConversationId, "voicemail");
+            twilio.AppendSpeech(response, request.ConversationId, voicemail);
         }
         else
         {
             if (agent.Labels.Contains("realtime"))
             {
                 response = twilio.ReturnBidirectionalMediaStreamsInstructions(instruction, agent);
+            }
+            // A call that arrives with an intent already has its first message queued for the Gather flow
+            else if (string.IsNullOrWhiteSpace(request.Intent) && _settings.ConversationRelay.IsEnabledFor(request.AgentId))
+            {
+                // ConversationRelay speaks text only: a greeting a session hook wrote (e.g. with the caller's name) is
+                // said as it is, otherwise the prompts the session hooks queued become the greeting
+                var greeting = !string.IsNullOrWhiteSpace(instruction.Text)
+                    ? instruction.Text
+                    : string.Join(" ", instruction.SpeechPaths
+                        .Select(twilio.GetPromptText)
+                        .Where(text => !string.IsNullOrWhiteSpace(text)));
+                if (greeting.Length == 0 && instruction.SpeechPaths.Count > 0)
+                {
+                    _logger.LogWarning($"No prompt text for the welcome speech of agent {request.AgentId}; " +
+                        "starting ConversationRelay without a greeting.");
+                }
+                response = twilio.ReturnConversationRelay(request.AgentId, request.ConversationId, greeting);
             }
             else
             {
@@ -166,7 +188,7 @@ public class TwilioInboundController : TwilioController
 
         var states = new List<MessageState>
         {
-            new("channel", ConversationChannel.Phone, isGlobal: true),
+            new(StateConst.CHANNEL, ConversationChannel.Phone, isGlobal: true),
             new("calling_phone", request.From, isGlobal: true),
             new("phone_direction", request.Direction, isGlobal: true),
             new("twilio_call_sid", request.CallSid, isGlobal: true),
@@ -200,20 +222,23 @@ public class TwilioInboundController : TwilioController
             states.Add(new(StateConst.ROUTING_MODE, agent.Mode));
         }
 
-        convService.SetConversationId(conversation.Id, states);
+        // Kept for the whole call: the agent speaking after a routing may not carry the label, the stream stays
+        states.Add(new(TwilioService.RealtimeCallState, agent.Labels.Contains("realtime") ? "true" : "false", isGlobal: true));
+
+        await convService.SetConversationId(conversation.Id, states);
 
         if (!string.IsNullOrEmpty(request.Intent))
         {
             var storage = _services.GetRequiredService<IConversationStorage>();
 
-            storage.Append(conversation.Id, new RoleDialogModel(AgentRole.User, request.Intent)
+            await storage.Append(conversation.Id, new RoleDialogModel(AgentRole.User, request.Intent)
             {
                 CurrentAgentId = agent.Id,
                 CreatedAt = DateTime.UtcNow
             });
         }
 
-        convService.SaveStates();
+        await convService.SaveStates();
         
         // reload agent rendering with states
         agent = await agentService.LoadAgent(request.AgentId);

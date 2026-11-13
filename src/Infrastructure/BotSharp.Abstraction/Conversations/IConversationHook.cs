@@ -1,4 +1,5 @@
 using BotSharp.Abstraction.Hooks;
+using BotSharp.Abstraction.Repositories.Filters;
 
 namespace BotSharp.Abstraction.Conversations;
 
@@ -17,7 +18,21 @@ public interface IConversationHook : IHookBase
     /// It will send to the conversation context to help LLM to understand the user's intent.
     /// </summary>
     /// <returns></returns>
-    Task<string> GetConversationIntent() => Task.FromResult(string.Empty);
+    Task<string> GetConversationIntent();
+
+    /// <summary>
+    /// Triggered when listing conversations.
+    /// </summary>
+    /// <param name="filter"></param>
+    /// <returns></returns>
+    Task<string> OnConversationsListing(ConversationFilter filter);
+
+    /// <summary>
+    /// Triggered when a new conversation is creating.
+    /// </summary>
+    /// <param name="conversation"></param>
+    /// <returns></returns>
+    Task OnConversationCreating(Conversation conversation);
 
     /// <summary>
     /// Triggered when user connects with agent first time.

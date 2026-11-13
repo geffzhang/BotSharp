@@ -1,0 +1,175 @@
+using BotSharp.Abstraction.Models;
+using BotSharp.Abstraction.Settings;
+
+namespace BotSharp.Plugin.AudioHandler.Functions;
+
+public class ReadAudioFn : IFunctionCallback
+{
+    public string Name => "util-audio-handle_audio_request";
+    public string Indication => "Reading audio";
+
+    private readonly IServiceProvider _services;
+    private readonly IFileStorageService _fileStorage;
+    private readonly ILogger<ReadAudioFn> _logger;
+    private readonly BotSharpOptions _options;
+    private readonly AudioHandlerSettings _settings;
+
+    private readonly IEnumerable<string> _audioContentTypes = new List<string>
+    {
+        AudioType.mp3.ToFileType(),
+        AudioType.wav.ToFileType(),
+    };
+
+    public ReadAudioFn(
+        IServiceProvider services,
+        ILogger<ReadAudioFn> logger,
+        BotSharpOptions options,
+        AudioHandlerSettings settings,
+        IFileStorageService fileStorage)
+    {
+        _services = services;
+        _logger = logger;
+        _options = options;
+        _settings = settings;
+        _fileStorage = fileStorage;
+    }
+
+    public async Task<bool> Execute(RoleDialogModel message)
+    {
+        var args = JsonSerializer.Deserialize<LlmContextIn>(message.FunctionArgs, _options.JsonSerializerOptions);
+        var agentService = _services.GetRequiredService<IAgentService>();
+        var conv = _services.GetRequiredService<IConversationService>();
+        var routingCtx = _services.GetRequiredService<IRoutingContext>();
+
+        var agent = await agentService.GetAgent(message.CurrentAgentId);
+
+        var wholeDialogs = routingCtx.GetDialogs();
+        if (wholeDialogs.IsNullOrEmpty())
+        {
+            wholeDialogs = await conv.GetDialogHistory();
+        }
+
+        var dialogs = AssembleFiles(conv.ConversationId, wholeDialogs);
+        var response = await GetAudioTranscription(agent, dialogs);
+        message.Content = response;
+        dialogs.ForEach(x => x.Files = null);
+        return true;
+    }
+
+    private List<RoleDialogModel> AssembleFiles(string convId, List<RoleDialogModel> dialogs)
+    {
+        if (dialogs.IsNullOrEmpty())
+        {
+            return [];
+        }
+
+        var messageId = dialogs.Select(x => x.MessageId).Distinct().ToList();
+        var audioFiles = _fileStorage.GetMessageFiles(convId, messageId, options: new()
+        {
+            Sources = [FileSource.User],
+            ContentTypes = _audioContentTypes
+        });
+
+        foreach (var dialog in dialogs)
+        {
+            var found = audioFiles.Where(x => x.MessageId == dialog.MessageId
+                                           && x.FileSource.IsEqualTo(FileSource.User)).ToList();
+
+            if (found.IsNullOrEmpty() || !dialog.IsFromUser)
+            {
+                continue;
+            }
+
+            dialog.Files = found.Select(x => new BotSharpFile
+            {
+                ContentType = x.ContentType,
+                FileUrl = x.FileUrl,
+                FileStorageUrl = x.FileStorageUrl
+            }).ToList();
+        }
+
+        return dialogs;
+    }
+
+    private async Task<string> GetAudioTranscription(Agent agent, List<RoleDialogModel> dialogs)
+    {
+        var audioCompletion = PrepareModel(agent);
+        var dialog = dialogs.Where(x => !x.Files.IsNullOrEmpty()).LastOrDefault();
+        var transcripts = new List<string>();
+
+        if (dialog?.Files != null)
+        {
+            foreach (var file in dialog.Files)
+            {
+                if (string.IsNullOrWhiteSpace(file?.FileStorageUrl))
+                {
+                    continue;
+                }
+
+                var extension = Path.GetExtension(file.FileStorageUrl);
+                var fileName = Path.GetFileName(file.FileStorageUrl);
+                if (!VerifyAudioFileType(fileName))
+                {
+                    continue;
+                }
+
+                var binary = _fileStorage.GetFileBytes(file.FileStorageUrl);
+                using var stream = binary.ToStream();
+                stream.Position = 0;
+
+                var result = await audioCompletion.TranscriptTextAsync(stream, fileName);
+                transcripts.Add(result);
+                stream.Close();
+                await Task.Delay(100);
+            }
+        }
+        
+
+        if (transcripts.IsNullOrEmpty())
+        {
+            var msg = "No audio is found in the chat.";
+            _logger.LogWarning(msg);
+            transcripts.Add(msg);
+        }
+
+        return string.Join("\r\n\r\n", transcripts);
+    }
+
+    private IAudioTranscription PrepareModel(Agent agent)
+    {
+        var (provider, model) = GetLlmProviderModel(agent);
+        return CompletionProvider.GetAudioTranscriber(_services, provider: provider, model: model);
+    }
+
+    private bool VerifyAudioFileType(string fileName)
+    {
+        var extension = Path.GetExtension(fileName).TrimStart('.').ToLower();
+        return Enum.TryParse<AudioType>(extension, out _)
+                    || !string.IsNullOrEmpty(FileUtility.GetFileContentType(fileName));
+    }
+
+    private (string, string) GetLlmProviderModel(Agent agent)
+    {
+        var provider = agent?.LlmConfig?.AudioTranscription?.Provider;
+        var model = agent?.LlmConfig?.AudioTranscription?.Model;
+        var settingService = _services.GetRequiredService<ISettingService>();
+
+        if (!string.IsNullOrEmpty(provider) && !string.IsNullOrEmpty(model))
+        {
+            return (provider, model);
+        }
+
+        provider = _settings?.Audio?.Reading?.Provider;
+        model = _settings?.Audio?.Reading?.Model;
+
+        if (!string.IsNullOrEmpty(provider) && !string.IsNullOrEmpty(model))
+        {
+            return (provider, model);
+        }
+
+        provider = "openai";
+        model = Gpt4xModelConstants.GPT_4o_Mini_Transcribe;
+
+        return (provider, model);
+    }
+}
